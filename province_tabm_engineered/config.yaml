@@ -1,0 +1,74 @@
+data:
+  # 可在调用 train(config, data=...) 时覆盖；支持 parquet 文件或目录。
+  path: /home/nuoya_model_train/power_by_date_final_0807/ultra-short-general
+  file_glob: "*.parquet"
+  province_station: province_guangxi_solar
+  plant_station_pattern: "^plant_guangfu\\d{4}$"
+  province_capacity: 15000.0
+  # 保持原脚本行为：用该表覆盖场站装机容量；若输入数据已正确填充则设为 null。
+  capacity_csv: /jtdata/products/data/info.csv
+  capacity_station_column: plant_pointname
+  capacity_value_column: GCCAPACITY
+  columns:
+    timestamp: timestamp_win
+    station: station
+    capacity: cap_power_on
+    power_history: observe_power
+    power_future: observe_power_future
+
+features:
+  history_length: 96
+  n_horizons: 16
+  minutes_per_point: 15
+  weather_suffix: _predict
+  weather_columns:
+    - GHI_SOLARGIS_predict
+    - TEMP_SOLARGIS_predict
+    - ssrd_pos_1_predict
+    - t2m_pos_1_predict
+  wind_direction_keywords:
+    - wind_direction
+    - winddirection
+    - wd_
+
+model:
+  # all 表示 1..n_horizons；也可以写成 [1, 4, 8, 16]。
+  horizons: all
+  target_scale: 15000.0
+  prediction_clip: [0.0, 15750.0]
+  device: auto
+  architecture:
+    n_blocks: 2
+    d_block: 512
+    dropout: 0.1
+    activation: ReLU
+    k: 32
+    arch_type: tabm
+    start_scaling_init: normal
+
+training:
+  seed: 2026
+  epochs: 200
+  batch_size: 512
+  inference_batch_size: 512
+  early_stopping_patience: 10
+  learning_rate: 0.002
+  weight_decay: 0.0003
+  gradient_clipping_norm: 1.0
+  preprocessing:
+    noise_std: 0.00001
+    min_quantiles: 10
+    max_quantiles: 1000
+    samples_per_quantile: 30
+    # 与原脚本一致，等价于对当前数据量不做抽样。
+    quantile_subsample: 1000000000
+  split:
+    # 两个日期同时设置时优先使用；null 时按数据末尾天数自动划分。
+    validation_start: null
+    test_start: null
+    validation_days: 2
+    test_days: 2
+
+output:
+  checkpoint_dir: ./artifacts/tabm_v2
+  prediction_column: predict_power_province_guangxi_solar
