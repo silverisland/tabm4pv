@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,57 @@ import pandas as pd
 from .config import Config, ConfigInput, dump_config, load_config
 from .data import DataInput, load_data
 from .features import build_samples, weather_columns
+from .logging_utils import log
 from .model import infer_array, load_one, resolve_device, seed_everything, train_one, transform
+
+
+def _config_source(config: ConfigInput) -> str:
+    if isinstance(config, Mapping):
+        return "<Python mapping>"
+    return str(Path(config).expanduser().resolve())
+
+
+def _log_common_parameters(task: str, config_input: ConfigInput, config: Config) -> None:
+    data = config["data"]
+    features = config["features"]
+    model = config["model"]
+    capacity_csv = data.get("capacity_csv")
+    if capacity_csv:
+        capacity_csv = str(Path(capacity_csv).expanduser().resolve())
+    else:
+        capacity_csv = "<使用输入数据容量列>"
+
+    log(f"{task}参数[config]：source={_config_source(config_input)}")
+    log(
+        f"{task}参数[data]：province_station={data['province_station']}, "
+        f"province_capacity={data['province_capacity']}, "
+        f"capacity_csv={capacity_csv}, columns={data['columns']}"
+    )
+    log(
+        f"{task}参数[features]：history_length={features['history_length']}, "
+        f"n_horizons={features['n_horizons']}, "
+        f"minutes_per_point={features['minutes_per_point']}, "
+        f"weather_columns={features.get('weather_columns') or '<按后缀自动发现>'}"
+    )
+    log(
+        f"{task}参数[model]：device={model.get('device', 'auto')}, "
+        f"target_scale={model['target_scale']}, "
+        f"prediction_clip={model['prediction_clip']}, "
+        f"architecture={model.get('architecture', '<TabM defaults>')}"
+    )
+
+
+def _log_checkpoint_parameters(
+    task: str,
+    ckpt_input: str | Path,
+    checkpoint_dir: Path,
+    model_paths: list[Path],
+) -> None:
+    log(
+        f"{task}参数[checkpoint]：input={ckpt_input}, "
+        f"resolved_dir={checkpoint_dir}, "
+        f"model_files={[str(path.resolve()) for path in model_paths]}"
+    )
 
 
 def _horizons(config: Config) -> list[int]:
@@ -67,19 +118,46 @@ def _metrics(target: np.ndarray, prediction: np.ndarray) -> dict[str, float]:
 def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
     """Train all configured horizons and return artifact paths and metrics."""
     cfg = load_config(config)
+    _log_common_parameters("训练", config, cfg)
+    training = cfg["training"]
+    log(
+        f"训练参数[optimizer]：seed={training['seed']}, epochs={training['epochs']}, "
+        f"batch_size={training['batch_size']}, "
+        f"inference_batch_size={training['inference_batch_size']}, "
+        f"learning_rate={training['learning_rate']}, "
+        f"weight_decay={training['weight_decay']}, "
+        f"gradient_clipping_norm={training.get('gradient_clipping_norm')}, "
+        f"early_stopping_patience={training['early_stopping_patience']}"
+    )
+    log(
+        f"训练参数[split]：{training['split']}；"
+        f"preprocessing={training.get('preprocessing', {})}"
+    )
     seed_everything(int(cfg["training"]["seed"]))
     frame = load_data(data, cfg, require_target=True)
     weather = weather_columns(frame, cfg)
     output_dir = Path(cfg["output"]["checkpoint_dir"]).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    dump_config(cfg, output_dir / "config_resolved.yaml")
+    resolved_config_path = output_dir / "config_resolved.yaml"
+    dump_config(cfg, resolved_config_path)
+    selected_horizons = _horizons(cfg)
+    log(
+        f"训练任务开始：horizons={selected_horizons}, weather={weather}, "
+        f"checkpoint_dir={output_dir}"
+    )
+    log(f"解析后配置已保存：{resolved_config_path}")
 
     metrics, test_predictions = [], []
-    for horizon in _horizons(cfg):
+    for horizon in selected_horizons:
         samples, names = build_samples(
             frame, cfg, horizon, weather, require_target=True
         )
         train_frame, validation_frame, test_frame = _split(samples, cfg)
+        log(
+            f"horizon={horizon:02d} 样本构造完成：total={len(samples):,}, "
+            f"train={len(train_frame):,}, validation={len(validation_frame):,}, "
+            f"test={len(test_frame):,}, features={len(names)}"
+        )
         fit_result = train_one(
             train_frame, validation_frame, names, horizon, cfg, output_dir
         )
@@ -100,20 +178,34 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
         result["horizon"] = horizon
         result[cfg["output"]["prediction_column"]] = prediction
         test_predictions.append(result)
+        log(
+            f"horizon={horizon:02d} 完成：test_rmse={score['rmse']:.6f}, "
+            f"test_mae={score['mae']:.6f}"
+        )
 
     metrics_df = pd.DataFrame(metrics)
     predictions_df = pd.concat(test_predictions, ignore_index=True)
-    metrics_df.to_csv(output_dir / "metrics_by_horizon.csv", index=False)
-    predictions_df.to_parquet(output_dir / "test_predictions.parquet", index=False)
+    metrics_path = output_dir / "metrics_by_horizon.csv"
+    predictions_path = output_dir / "test_predictions.parquet"
+    metadata_path = output_dir / "metadata.json"
+    metrics_df.to_csv(metrics_path, index=False)
+    predictions_df.to_parquet(predictions_path, index=False)
     metadata = {
         "artifact_version": 1,
         "model_type": "TabM",
-        "horizons": _horizons(cfg),
+        "horizons": selected_horizons,
         "weather_columns": weather,
         "mean_test_rmse": float(metrics_df["test_rmse"].mean()),
     }
-    with (output_dir / "metadata.json").open("w", encoding="utf-8") as file:
+    with metadata_path.open("w", encoding="utf-8") as file:
         json.dump(metadata, file, ensure_ascii=False, indent=2)
+    log(f"训练指标已保存：{metrics_path.resolve()}")
+    log(f"测试预测已保存：{predictions_path.resolve()}")
+    log(f"checkpoint 元数据已保存：{metadata_path.resolve()}")
+    log(
+        f"训练任务完成：mean_test_rmse={metadata['mean_test_rmse']:.6f}, "
+        f"checkpoint_dir={output_dir}"
+    )
     return {
         "checkpoint_dir": output_dir,
         "metrics": metrics_df,
@@ -211,6 +303,7 @@ def _predict_loaded_frame(
             checkpoint_dir, samples, horizon, config
         )
         outputs.append(result)
+        log(f"horizon={horizon:02d} 推理完成：rows={len(result):,}")
     return pd.concat(outputs, ignore_index=True).sort_values(
         ["timestamp", "horizon"], ignore_index=True
     )
@@ -221,11 +314,24 @@ def predict(
 ) -> pd.DataFrame:
     """Run inference and return a long-form prediction DataFrame."""
     cfg = load_config(config)
+    _log_common_parameters("推理", config, cfg)
     checkpoint_dir, model_paths, metadata = _checkpoint(ckpt_path)
+    _log_checkpoint_parameters("推理", ckpt_path, checkpoint_dir, model_paths)
+    log(
+        f"推理参数[runtime]：inference_batch_size="
+        f"{cfg['training']['inference_batch_size']}, "
+        f"prediction_column={cfg['output']['prediction_column']}, "
+        f"metadata_horizons={metadata['horizons']}, "
+        f"metadata_weather_columns={metadata['weather_columns']}"
+    )
+    log(
+        f"推理任务开始：checkpoint_dir={checkpoint_dir}, "
+        f"models={len(model_paths)}"
+    )
     frame = load_data(data, cfg, require_target=False)
     weather = weather_columns(frame, cfg)
     _validate_weather(metadata, weather)
-    return _predict_loaded_frame(
+    result = _predict_loaded_frame(
         checkpoint_dir,
         model_paths,
         frame,
@@ -233,6 +339,11 @@ def predict(
         weather,
         include_target=False,
     )
+    log(
+        f"推理任务完成：rows={len(result):,}, columns={len(result.columns)}；"
+        "Python API 仅返回 DataFrame，不自动保存文件"
+    )
+    return result
 
 
 def evaluate(
@@ -240,7 +351,20 @@ def evaluate(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Evaluate a checkpoint on labeled data; return (metrics, predictions)."""
     cfg = load_config(config)
+    _log_common_parameters("测试", config, cfg)
     checkpoint_dir, model_paths, metadata = _checkpoint(ckpt_path)
+    _log_checkpoint_parameters("测试", ckpt_path, checkpoint_dir, model_paths)
+    log(
+        f"测试参数[runtime]：inference_batch_size="
+        f"{cfg['training']['inference_batch_size']}, "
+        f"prediction_column={cfg['output']['prediction_column']}, "
+        f"metadata_horizons={metadata['horizons']}, "
+        f"metadata_weather_columns={metadata['weather_columns']}"
+    )
+    log(
+        f"测试任务开始：checkpoint_dir={checkpoint_dir}, "
+        f"models={len(model_paths)}"
+    )
     frame = load_data(data, cfg, require_target=True)
     weather = weather_columns(frame, cfg)
     _validate_weather(metadata, weather)
@@ -260,6 +384,14 @@ def evaluate(
             current[prediction_col].to_numpy(),
         )
         metrics.append({"horizon": int(horizon), "sample_count": len(current), **score})
+        log(
+            f"horizon={int(horizon):02d} 测试指标：samples={len(current):,}, "
+            f"rmse={score['rmse']:.6f}, mae={score['mae']:.6f}"
+        )
+    log(
+        f"测试任务完成：prediction_rows={len(predictions):,}；"
+        "Python API 仅返回 metrics/predictions DataFrame，不自动保存文件"
+    )
     return pd.DataFrame(metrics), predictions
 
 

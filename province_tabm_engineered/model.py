@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 
 from .config import Config
+from .logging_utils import log
 
 
 def resolve_device(value: str) -> torch.device:
@@ -118,6 +119,11 @@ def train_one(
     y_val = validation_frame["target_power"].to_numpy(dtype=np.float32)
     if not len(train_frame) or not len(validation_frame):
         raise ValueError(f"horizon={horizon} 的训练集或验证集为空")
+    log(
+        f"horizon={horizon:02d} 开始训练：device={device}, "
+        f"features={len(feature_names)}, train={len(train_frame):,}, "
+        f"validation={len(validation_frame):,}"
+    )
 
     imputer, transformer, x_train = fit_preprocessor(
         x_train_raw, seed + horizon, config
@@ -144,6 +150,7 @@ def train_one(
     batch_size = int(train_cfg["batch_size"])
     target_scale = float(model_cfg["target_scale"])
     lower, upper = map(float, model_cfg["prediction_clip"])
+    log_every = max(int(train_cfg.get("log_every_n_epochs", 10)), 1)
 
     for epoch in range(int(train_cfg["epochs"])):
         model.train()
@@ -170,6 +177,12 @@ def train_one(
             upper,
         )
         rmse = float(np.sqrt(np.mean((validation_prediction - y_val) ** 2)))
+        if epoch == 0 or (epoch + 1) % log_every == 0:
+            log(
+                f"horizon={horizon:02d} epoch={epoch + 1:03d}/"
+                f"{int(train_cfg['epochs']):03d} validation_rmse={rmse:.6f} "
+                f"best_rmse={min(best_rmse, rmse):.6f}"
+            )
         if rmse < best_rmse:
             best_rmse, best_epoch = rmse, epoch
             best_state = deepcopy(model.state_dict())
@@ -177,10 +190,21 @@ def train_one(
         else:
             patience -= 1
             if patience <= 0:
+                log(
+                    f"horizon={horizon:02d} early stopping："
+                    f"epoch={epoch + 1}, best_epoch={best_epoch + 1}, "
+                    f"best_validation_rmse={best_rmse:.6f}"
+                )
                 break
 
     checkpoint_dir.joinpath("models").mkdir(parents=True, exist_ok=True)
     checkpoint_dir.joinpath("preprocessors").mkdir(parents=True, exist_ok=True)
+    model_path = checkpoint_dir / "models" / f"model_h{horizon:02d}.pt"
+    preprocessor_path = (
+        checkpoint_dir
+        / "preprocessors"
+        / f"preprocessor_h{horizon:02d}.joblib"
+    )
     torch.save(
         {
             "model_state_dict": best_state,
@@ -191,19 +215,27 @@ def train_one(
             "best_epoch": best_epoch,
             "architecture": architecture,
         },
-        checkpoint_dir / "models" / f"model_h{horizon:02d}.pt",
+        model_path,
     )
-    joblib.dump(
-        preprocessor,
-        checkpoint_dir / "preprocessors" / f"preprocessor_h{horizon:02d}.joblib",
-    )
+    joblib.dump(preprocessor, preprocessor_path)
+    log(f"horizon={horizon:02d} 模型已保存：{model_path.resolve()}")
+    log(f"horizon={horizon:02d} 预处理器已保存：{preprocessor_path.resolve()}")
     return {"best_epoch": best_epoch, "validation_rmse": best_rmse}
 
 
 def load_one(
     model_path: Path, checkpoint_dir: Path, device: torch.device
 ) -> tuple[torch.nn.Module, dict[str, Any], dict[str, Any]]:
+    log(f"加载模型 checkpoint：{model_path.resolve()}，device={device}")
     payload = torch.load(model_path, map_location=device, weights_only=True)
+    log(
+        "checkpoint 参数："
+        f"horizon={int(payload['horizon']):02d}, "
+        f"n_num_features={int(payload['n_num_features'])}, "
+        f"target_scale={float(payload['target_scale'])}, "
+        f"best_epoch={int(payload['best_epoch']) + 1}, "
+        f"architecture={payload.get('architecture', '<legacy TabM defaults>')}"
+    )
     model = make_model(
         int(payload["n_num_features"]),
         device,
@@ -211,7 +243,18 @@ def load_one(
     )
     model.load_state_dict(payload["model_state_dict"])
     horizon = int(payload["horizon"])
-    preprocessor = joblib.load(
-        checkpoint_dir / "preprocessors" / f"preprocessor_h{horizon:02d}.joblib"
+    preprocessor_path = (
+        checkpoint_dir
+        / "preprocessors"
+        / f"preprocessor_h{horizon:02d}.joblib"
+    )
+    preprocessor = joblib.load(preprocessor_path)
+    imputer = preprocessor["imputer"]
+    transformer = preprocessor["quantile_transformer"]
+    log(
+        f"加载预处理器：{preprocessor_path.resolve()}；"
+        f"imputer_features={getattr(imputer, 'n_features_in_', '<unknown>')}, "
+        f"quantiles={getattr(transformer, 'n_quantiles_', '<unknown>')}, "
+        f"output_distribution={getattr(transformer, 'output_distribution', '<unknown>')}"
     )
     return model, preprocessor, payload

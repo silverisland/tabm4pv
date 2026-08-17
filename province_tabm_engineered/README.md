@@ -99,6 +99,29 @@ artifacts/tabm_v2/
 
 推理时模型特征名、目标缩放和 horizon 从 checkpoint 读取，配置用于定义输入列、特征构造、设备与输出字段。气象列与训练元数据不一致时会直接报错，避免静默产生错误预测。
 
+## 运行日志
+
+训练、测试和推理都会向标准输出打印带时间戳的日志，包括数据规模、设备、horizon 进度和文件的绝对保存路径。训练期间可通过以下参数控制验证集日志频率：
+
+```yaml
+training:
+  log_every_n_epochs: 10
+```
+
+首个 epoch 始终打印；之后每隔指定 epoch 打印一次。模型与预处理器每次保存、加载时都会打印完整路径，方便从容器或任务调度日志中定位产物。
+
+任务启动时还会打印参数审计信息，包括：
+
+- config 输入来源和解析后的绝对路径；
+- checkpoint 原始输入、解析后的目录及实际加载的模型文件列表；
+- checkpoint 内的 horizon、特征数、target scale、best epoch 和模型结构；
+- DataFrame 列映射、容量来源、省级容量及气象列；
+- history length、horizon 数量、时间间隔、设备和预测裁剪范围；
+- batch size、学习率、权重衰减、early stopping 和数据切分参数；
+- Imputer 输入特征数及 QuantileTransformer 的 quantile 数量和输出分布。
+
+这些日志同时展示“调用时传入的参数”和“checkpoint 中实际保存的参数”，可以用于排查传错 config、ckpt、设备或特征配置的问题。
+
 ## 测试
 
 ```bash

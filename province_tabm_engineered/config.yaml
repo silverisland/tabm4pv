@@ -52,6 +52,8 @@ training:
   batch_size: 512
   inference_batch_size: 512
   early_stopping_patience: 10
+  # 每隔多少个 epoch 打印一次验证集日志；首个 epoch 始终打印。
+  log_every_n_epochs: 10
   learning_rate: 0.002
   weight_decay: 0.0003
   gradient_clipping_norm: 1.0

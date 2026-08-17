@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
+from .logging_utils import log
 
 
 DataInput = pd.DataFrame | str | Path | Sequence[str | Path]
@@ -37,13 +38,17 @@ def load_data(
         frame = source.copy()
         if "source_file" not in frame:
             frame["source_file"] = "<dataframe>"
+        log(f"已接收 DataFrame：rows={len(frame):,}, columns={len(frame.columns)}")
     else:
         frames = []
-        for path in _paths(source, data_cfg.get("file_glob", "*.parquet")):
+        paths = _paths(source, data_cfg.get("file_glob", "*.parquet"))
+        log(f"开始读取 parquet：files={len(paths)}, source={source}")
+        for path in paths:
             item = pd.read_parquet(path)
             item["source_file"] = path.name
             frames.append(item)
         frame = pd.concat(frames, ignore_index=True)
+        log(f"parquet 读取完成：rows={len(frame):,}, columns={len(frame.columns)}")
 
     cols = data_cfg["columns"]
     required = [cols["timestamp"], cols["station"], cols["power_history"]]
@@ -57,7 +62,9 @@ def load_data(
 
     capacity_csv = data_cfg.get("capacity_csv")
     if capacity_csv:
-        cap = pd.read_csv(Path(capacity_csv).expanduser())
+        capacity_path = Path(capacity_csv).expanduser().resolve()
+        log(f"使用容量表覆盖场站容量：{capacity_path}")
+        cap = pd.read_csv(capacity_path)
         station_key = data_cfg.get("capacity_station_column", "plant_pointname")
         value_key = data_cfg.get("capacity_value_column", "GCCAPACITY")
         mapping = cap.drop_duplicates(station_key).set_index(station_key)[value_key]
@@ -81,6 +88,11 @@ def load_data(
     if not valid.all():
         bad = frame.loc[~valid, station_col].dropna().unique().tolist()
         raise ValueError(f"发现非法 station 标识: {bad[:10]}")
+    log(
+        "数据校验完成："
+        f"rows={len(frame):,}, stations={frame[station_col].nunique():,}, "
+        f"time_range=[{frame[timestamp_col].min()}, {frame[timestamp_col].max()}]"
+    )
     return frame
 
 

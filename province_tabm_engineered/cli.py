@@ -36,13 +36,18 @@ def main() -> None:
         print(f"checkpoint: {result['checkpoint_dir']}")
     elif args.command == "test":
         metrics, predictions = test(args.checkpoint, args.data, args.config)
-        predictions.to_parquet(args.output, index=False)
-        metrics.to_csv(Path(args.output).with_suffix(".metrics.csv"), index=False)
+        predictions_path = Path(args.output).expanduser().resolve()
+        metrics_path = predictions_path.with_suffix(".metrics.csv")
+        predictions.to_parquet(predictions_path, index=False)
+        metrics.to_csv(metrics_path, index=False)
         print(metrics.to_string(index=False))
+        print(f"predictions saved to: {predictions_path}", flush=True)
+        print(f"metrics saved to: {metrics_path}", flush=True)
     else:
         result = predict(args.checkpoint, args.data, args.config)
-        result.to_parquet(args.output, index=False)
-        print(f"saved {len(result):,} predictions to {Path(args.output).resolve()}")
+        output_path = Path(args.output).expanduser().resolve()
+        result.to_parquet(output_path, index=False)
+        print(f"saved {len(result):,} predictions to {output_path}", flush=True)
 
 
 if __name__ == "__main__":
