@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
-from .api import predict, test, train
+if __package__:
+    from .api import predict, test, train
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from province_tabm_engineered.api import predict, test, train
 
 
 def parser() -> argparse.ArgumentParser:
