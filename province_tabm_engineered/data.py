@@ -8,10 +8,79 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
-from .logging_utils import log
 
 
 DataInput = pd.DataFrame | str | Path | Sequence[str | Path]
+
+
+def has_date_ranges(config: Config) -> bool:
+    return bool(config["data"].get("date_ranges"))
+
+
+def _date_bounds(config: Config, range_name: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    ranges = config["data"].get("date_ranges")
+    if not ranges or range_name not in ranges:
+        raise ValueError(f"config.data.date_ranges 缺少范围: {range_name}")
+    selected = ranges[range_name]
+    return (
+        pd.Timestamp(selected["start"]).normalize(),
+        pd.Timestamp(selected["end"]).normalize(),
+    )
+
+
+def _filter_paths_by_date(
+    paths: list[Path], config: Config, range_name: str
+) -> list[Path]:
+    start, end = _date_bounds(config, range_name)
+    pattern = re.compile(
+        config["data"].get(
+            "file_date_regex", r"plantid=(\d{4}-\d{2}-\d{2})\.parquet$"
+        )
+    )
+    selected: list[Path] = []
+    unmatched: list[str] = []
+    for path in paths:
+        match = pattern.search(path.name)
+        if match is None:
+            unmatched.append(path.name)
+            continue
+        file_date = pd.Timestamp(match.group(1)).normalize()
+        if start <= file_date <= end:
+            selected.append(path)
+    if unmatched and config["data"].get("strict_file_dates", True):
+        raise ValueError(
+            "以下 parquet 文件名无法提取日期，请检查 data.file_date_regex："
+            f"{unmatched[:10]}"
+        )
+    if not selected:
+        raise FileNotFoundError(
+            f"{range_name} 日期范围 [{start.date()}, {end.date()}] 没有匹配文件"
+        )
+    print(
+        f"{range_name} 文件筛选：date_range=[{start.date()}, {end.date()}], "
+        f"files={len(selected)}, first={selected[0].name}, last={selected[-1].name}"
+    )
+    return selected
+
+
+def _filter_frame_by_date(
+    frame: pd.DataFrame, config: Config, range_name: str
+) -> pd.DataFrame:
+    start, end = _date_bounds(config, range_name)
+    timestamp_col = config["data"]["columns"]["timestamp"]
+    timestamps = pd.to_datetime(frame[timestamp_col], errors="coerce")
+    day = timestamps.dt.normalize()
+    selected = frame[(day >= start) & (day <= end)].copy()
+    if selected.empty:
+        raise ValueError(
+            f"DataFrame 在 {range_name} 日期范围 "
+            f"[{start.date()}, {end.date()}] 内没有数据"
+        )
+    print(
+        f"{range_name} DataFrame 筛选：date_range=[{start.date()}, {end.date()}], "
+        f"rows={len(selected):,}"
+    )
+    return selected
 
 
 def _paths(value: str | Path | Sequence[str | Path], file_glob: str) -> list[Path]:
@@ -26,7 +95,11 @@ def _paths(value: str | Path | Sequence[str | Path], file_glob: str) -> list[Pat
 
 
 def load_data(
-    data: DataInput | None, config: Config, *, require_target: bool
+    data: DataInput | None,
+    config: Config,
+    *,
+    require_target: bool,
+    date_range: str | None = None,
 ) -> pd.DataFrame:
     """Load a DataFrame, parquet file, directory, or a sequence of parquet files."""
     data_cfg = config["data"]
@@ -36,19 +109,23 @@ def load_data(
 
     if isinstance(source, pd.DataFrame):
         frame = source.copy()
+        if date_range is not None and has_date_ranges(config):
+            frame = _filter_frame_by_date(frame, config, date_range)
         if "source_file" not in frame:
             frame["source_file"] = "<dataframe>"
-        log(f"已接收 DataFrame：rows={len(frame):,}, columns={len(frame.columns)}")
+        print(f"已接收 DataFrame：rows={len(frame):,}, columns={len(frame.columns)}")
     else:
         frames = []
         paths = _paths(source, data_cfg.get("file_glob", "*.parquet"))
-        log(f"开始读取 parquet：files={len(paths)}, source={source}")
+        if date_range is not None and has_date_ranges(config):
+            paths = _filter_paths_by_date(paths, config, date_range)
+        print(f"开始读取 parquet：files={len(paths)}, source={source}")
         for path in paths:
             item = pd.read_parquet(path)
             item["source_file"] = path.name
             frames.append(item)
         frame = pd.concat(frames, ignore_index=True)
-        log(f"parquet 读取完成：rows={len(frame):,}, columns={len(frame.columns)}")
+        print(f"parquet 读取完成：rows={len(frame):,}, columns={len(frame.columns)}")
 
     cols = data_cfg["columns"]
     required = [cols["timestamp"], cols["station"], cols["power_history"]]
@@ -63,7 +140,7 @@ def load_data(
     capacity_csv = data_cfg.get("capacity_csv")
     if capacity_csv:
         capacity_path = Path(capacity_csv).expanduser().resolve()
-        log(f"使用容量表覆盖场站容量：{capacity_path}")
+        print(f"使用容量表覆盖场站容量：{capacity_path}")
         cap = pd.read_csv(capacity_path)
         station_key = data_cfg.get("capacity_station_column", "plant_pointname")
         value_key = data_cfg.get("capacity_value_column", "GCCAPACITY")
@@ -88,7 +165,7 @@ def load_data(
     if not valid.all():
         bad = frame.loc[~valid, station_col].dropna().unique().tolist()
         raise ValueError(f"发现非法 station 标识: {bad[:10]}")
-    log(
+    print(
         "数据校验完成："
         f"rows={len(frame):,}, stations={frame[station_col].nunique():,}, "
         f"time_range=[{frame[timestamp_col].min()}, {frame[timestamp_col].max()}]"

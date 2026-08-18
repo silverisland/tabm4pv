@@ -1,7 +1,16 @@
 data:
   # 可在调用 train(config, data=...) 时覆盖；支持 parquet 文件或目录。
   path: /home/nuoya_model_train/power_by_date_final_0807/ultra-short-general
-  file_glob: "*.parquet"
+  file_glob: "plantid=*.parquet"
+  file_date_regex: "plantid=(\\d{4}-\\d{2}-\\d{2})\\.parquet$"
+  strict_file_dates: true
+  # 启用后，train()/test() 共用 data.path，并在读取前按文件名日期筛选。
+  # start/end 均为闭区间；设为 null 时继续使用 training.split 自动切分。
+  date_ranges: null
+  # date_ranges:
+  #   train:      {start: 2026-06-01, end: 2026-07-31}
+  #   validation: {start: 2026-08-01, end: 2026-08-07}
+  #   test:       {start: 2026-08-08, end: 2026-08-15}
   province_station: province_guangxi_solar
   plant_station_pattern: "^plant_guangfu\\d{4}$"
   province_capacity: 15000.0
@@ -74,3 +83,8 @@ training:
 output:
   checkpoint_dir: ./artifacts/tabm_v2
   prediction_column: predict_power_province_guangxi_solar
+  # null 时保存到 checkpoint_dir/forecasts，与原脚本目录结构一致。
+  forecast_dir: null
+  # auto 表示运行当天 YYYYMMDD，也可固定为具体日期字符串。
+  date_tag: auto
+  method_version: tabm_v2

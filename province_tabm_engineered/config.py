@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -22,6 +23,17 @@ def _positive(value: Any, name: str) -> None:
         raise ValueError(f"config.{name} 必须大于 0")
 
 
+def _date_value(value: Any, name: str) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as error:
+        raise ValueError(f"config.{name} 必须是 YYYY-MM-DD 日期") from error
+
+
 def validate_config(config: Config) -> None:
     """Fail early for malformed values that would otherwise fail deep in training."""
     sections = ("data", "features", "model", "training", "output")
@@ -41,6 +53,29 @@ def validate_config(config: Config) -> None:
         ("timestamp", "station", "capacity", "power_history", "power_future"),
     )
     _positive(data["province_capacity"], "data.province_capacity")
+    date_ranges = data.get("date_ranges")
+    if date_ranges:
+        _require_keys(date_ranges, "data.date_ranges", ("train", "validation", "test"))
+        parsed_ranges: dict[str, tuple[date, date]] = {}
+        for name in ("train", "validation", "test"):
+            selected = date_ranges[name]
+            if not isinstance(selected, dict):
+                raise ValueError(f"config.data.date_ranges.{name} 必须是字典")
+            _require_keys(selected, f"data.date_ranges.{name}", ("start", "end"))
+            start = _date_value(selected["start"], f"data.date_ranges.{name}.start")
+            end = _date_value(selected["end"], f"data.date_ranges.{name}.end")
+            if start > end:
+                raise ValueError(
+                    f"config.data.date_ranges.{name} 的 start 不能晚于 end"
+                )
+            parsed_ranges[name] = (start, end)
+        train_range = parsed_ranges["train"]
+        validation_range = parsed_ranges["validation"]
+        test_range = parsed_ranges["test"]
+        if not (train_range[1] < validation_range[0] <= validation_range[1] < test_range[0]):
+            raise ValueError(
+                "config.data.date_ranges 必须按 train、validation、test 顺序且互不重叠"
+            )
 
     features = config["features"]
     _require_keys(features, "features", ("history_length", "n_horizons", "minutes_per_point"))

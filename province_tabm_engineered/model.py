@@ -16,7 +16,6 @@ import torch
 import torch.nn as nn
 
 from .config import Config
-from .logging_utils import log
 
 
 def resolve_device(value: str) -> torch.device:
@@ -119,7 +118,7 @@ def train_one(
     y_val = validation_frame["target_power"].to_numpy(dtype=np.float32)
     if not len(train_frame) or not len(validation_frame):
         raise ValueError(f"horizon={horizon} 的训练集或验证集为空")
-    log(
+    print(
         f"horizon={horizon:02d} 开始训练：device={device}, "
         f"features={len(feature_names)}, train={len(train_frame):,}, "
         f"validation={len(validation_frame):,}"
@@ -178,7 +177,7 @@ def train_one(
         )
         rmse = float(np.sqrt(np.mean((validation_prediction - y_val) ** 2)))
         if epoch == 0 or (epoch + 1) % log_every == 0:
-            log(
+            print(
                 f"horizon={horizon:02d} epoch={epoch + 1:03d}/"
                 f"{int(train_cfg['epochs']):03d} validation_rmse={rmse:.6f} "
                 f"best_rmse={min(best_rmse, rmse):.6f}"
@@ -190,7 +189,7 @@ def train_one(
         else:
             patience -= 1
             if patience <= 0:
-                log(
+                print(
                     f"horizon={horizon:02d} early stopping："
                     f"epoch={epoch + 1}, best_epoch={best_epoch + 1}, "
                     f"best_validation_rmse={best_rmse:.6f}"
@@ -218,17 +217,17 @@ def train_one(
         model_path,
     )
     joblib.dump(preprocessor, preprocessor_path)
-    log(f"horizon={horizon:02d} 模型已保存：{model_path.resolve()}")
-    log(f"horizon={horizon:02d} 预处理器已保存：{preprocessor_path.resolve()}")
+    print(f"horizon={horizon:02d} 模型已保存：{model_path.resolve()}")
+    print(f"horizon={horizon:02d} 预处理器已保存：{preprocessor_path.resolve()}")
     return {"best_epoch": best_epoch, "validation_rmse": best_rmse}
 
 
 def load_one(
     model_path: Path, checkpoint_dir: Path, device: torch.device
 ) -> tuple[torch.nn.Module, dict[str, Any], dict[str, Any]]:
-    log(f"加载模型 checkpoint：{model_path.resolve()}，device={device}")
+    print(f"加载模型 checkpoint：{model_path.resolve()}，device={device}")
     payload = torch.load(model_path, map_location=device, weights_only=True)
-    log(
+    print(
         "checkpoint 参数："
         f"horizon={int(payload['horizon']):02d}, "
         f"n_num_features={int(payload['n_num_features'])}, "
@@ -251,7 +250,7 @@ def load_one(
     preprocessor = joblib.load(preprocessor_path)
     imputer = preprocessor["imputer"]
     transformer = preprocessor["quantile_transformer"]
-    log(
+    print(
         f"加载预处理器：{preprocessor_path.resolve()}；"
         f"imputer_features={getattr(imputer, 'n_features_in_', '<unknown>')}, "
         f"quantiles={getattr(transformer, 'n_quantiles_', '<unknown>')}, "
