@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from province_tabm_engineered.features import build_samples
+from province_tabm_engineered.features import build_feature_data
 
 
 def test_build_inference_samples_without_future_target():
@@ -11,6 +11,8 @@ def test_build_inference_samples_without_future_target():
         "data": {
             "province_station": "province_guangxi_solar",
             "plant_station_pattern": r"^plant_guangfu\d{4}$",
+            "province_capacity": 15000.0,
+            "capacity_csv": None,
             "columns": {
                 "timestamp": "timestamp_win",
                 "station": "station",
@@ -33,17 +35,20 @@ def test_build_inference_samples_without_future_target():
             "cap_power_on": [15000.0, 100.0],
             "observe_power": [np.arange(4), np.arange(4)],
             "ghi_predict": [np.arange(2), np.array([10.0, 20.0])],
-            "source_file": ["input", "input"],
         }
     )
-    samples, names = build_samples(
-        data, config, 2, ["ghi_predict"], require_target=False
-    )
+    feature_data = build_feature_data(data, config, [2], require_target=False)
+    samples = feature_data.samples(2)
     assert len(samples) == 1
     assert "target_power" not in samples
     assert samples.loc[0, "target_timestamp"] == timestamp + pd.Timedelta(minutes=30)
     assert samples.loc[0, "weighted__ghi_predict__mean"] == 20.0
-    assert names[:4] == ["power_lag_4", "power_lag_3", "power_lag_2", "power_lag_1"]
+    assert feature_data.feature_names[:4] == [
+        "power_lag_4",
+        "power_lag_3",
+        "power_lag_2",
+        "power_lag_1",
+    ]
 
 
 def test_v2_feature_values_match_original_recipe():
@@ -51,6 +56,8 @@ def test_v2_feature_values_match_original_recipe():
         "data": {
             "province_station": "province_guangxi_solar",
             "plant_station_pattern": r"^plant_guangfu\d{4}$",
+            "province_capacity": 15000.0,
+            "capacity_csv": None,
             "columns": {
                 "timestamp": "timestamp_win",
                 "station": "station",
@@ -90,12 +97,17 @@ def test_v2_feature_values_match_original_recipe():
                 np.array([10.0, 20.0]),
                 np.array([30.0, np.nan]),
             ],
-            "source_file": ["input"] * 3,
         }
     )
 
-    samples, names = build_samples(
-        data, config, 2, ["ghi_predict"], require_target=True
+    feature_data = build_feature_data(data, config, [2], require_target=True)
+    samples = feature_data.samples(2)
+    names = feature_data.feature_names
+
+    assert feature_data.common.columns.tolist() == names[:4]
+    assert not any(
+        column.startswith("power_lag_")
+        for column in feature_data.horizons[2].columns
     )
 
     assert names == [

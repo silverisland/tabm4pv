@@ -74,16 +74,6 @@ def delivery_filename(origin: pd.Timestamp, config: Config) -> str:
     )
 
 
-def save_delivery_files(
-    predictions: pd.DataFrame,
-    checkpoint_dir: Path,
-    config: Config,
-) -> list[Path]:
-    """Save complete origins exactly like train_general.save_delivery_files()."""
-    frames = delivery_frames(predictions, config, skip_incomplete=True)
-    return save_delivery_frames(frames, checkpoint_dir, config)
-
-
 def save_delivery_frames(
     frames: dict[pd.Timestamp, pd.DataFrame],
     checkpoint_dir: Path,

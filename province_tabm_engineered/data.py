@@ -117,19 +117,12 @@ def _prepare_frame(
     config: Config,
     *,
     require_target: bool,
-    source_file: str | None,
+    source_label: str,
     capacity_mapping: pd.Series | None,
 ) -> pd.DataFrame:
     data_cfg = config["data"]
     cols = data_cfg["columns"]
     frame = frame.copy()
-    if source_file is None:
-        if "source_file" not in frame:
-            frame["source_file"] = "<dataframe>"
-        source_label = "<dataframe>"
-    else:
-        frame["source_file"] = source_file
-        source_label = source_file
 
     required = [cols["timestamp"], cols["station"], cols["power_history"]]
     if capacity_mapping is None:
@@ -155,8 +148,8 @@ def _prepare_frame(
         "province_capacity"
     ]
     pattern = re.compile(data_cfg["plant_station_pattern"])
-    valid = frame[station_col].eq(province) | frame[station_col].map(
-        lambda value: bool(pattern.fullmatch(str(value)))
+    valid = frame[station_col].eq(province) | frame[station_col].str.fullmatch(
+        pattern, na=False
     )
     if not valid.all():
         bad = frame.loc[~valid, station_col].dropna().unique().tolist()
@@ -167,8 +160,6 @@ def _prepare_frame(
 def _validate_file_content_date(
     frame: pd.DataFrame, path: Path, config: Config
 ) -> None:
-    if not config["data"].get("validate_file_content_date", True):
-        return
     file_date = _filename_date(path, config)
     if file_date is None:
         return
@@ -205,7 +196,7 @@ def iter_data_frames(
             frame,
             config,
             require_target=require_target,
-            source_file=None,
+            source_label="<dataframe>",
             capacity_mapping=capacity_mapping,
         )
         print(f"已接收 DataFrame：rows={len(frame):,}, columns={len(frame.columns)}")
@@ -222,7 +213,7 @@ def iter_data_frames(
             pd.read_parquet(path),
             config,
             require_target=require_target,
-            source_file=path.name,
+            source_label=path.name,
             capacity_mapping=capacity_mapping,
         )
         _validate_file_content_date(frame, path, config)

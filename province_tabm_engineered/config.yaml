@@ -4,8 +4,6 @@ data:
   file_glob: "plantid=*.parquet"
   file_date_regex: "plantid=(\\d{4}-\\d{2}-\\d{2})\\.parquet$"
   strict_file_dates: true
-  # 保证逐文件气象加权与全量计算等价：文件内起报日期须与文件名日期一致。
-  validate_file_content_date: true
   # 启用后，train()/test() 共用 data.path，并在读取前按文件名日期筛选。
   # start/end 均为闭区间；设为 null 时继续使用 training.split 自动切分。
   date_ranges: null

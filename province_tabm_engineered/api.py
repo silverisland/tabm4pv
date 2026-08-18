@@ -16,9 +16,8 @@ from .delivery import (
     delivery_frames,
     expected_horizons,
     save_delivery_frames,
-    save_delivery_files,
 )
-from .features import build_sample_sets
+from .features import FeatureData, build_feature_data
 from .model import infer_array, load_one, resolve_device, seed_everything, train_one, transform
 
 
@@ -44,7 +43,6 @@ def _print_common_parameters(task: str, config_input: ConfigInput, config: Confi
         f"province_capacity={data['province_capacity']}, "
         f"capacity_csv={capacity_csv}, columns={data['columns']}, "
         f"file_glob={data.get('file_glob', '*.parquet')}, "
-        f"validate_file_content_date={data.get('validate_file_content_date', True)}, "
         f"date_ranges={data.get('date_ranges')}"
     )
     print(
@@ -149,13 +147,13 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
         )
     seed_everything(int(cfg["training"]["seed"]))
     selected_horizons = _horizons(cfg)
-    range_samples: dict[str, dict[int, pd.DataFrame]] | None = None
-    range_feature_names: list[str] | None = None
+    range_data: dict[str, FeatureData] | None = None
     if has_date_ranges(cfg):
-        range_samples = {}
+        range_data = {}
         weather: list[str] | None = None
+        feature_names: list[str] | None = None
         for name in ("train", "validation", "test"):
-            current_samples, current_names, current_weather = build_sample_sets(
+            current = build_feature_data(
                 data,
                 cfg,
                 selected_horizons,
@@ -163,33 +161,35 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
                 date_range=name,
             )
             if weather is None:
-                weather = current_weather
-            elif current_weather != weather:
+                weather = current.weather_columns
+            elif current.weather_columns != weather:
                 raise ValueError(
-                    f"{name} 气象列 {current_weather} 与训练气象列 {weather} 不一致"
+                    f"{name} 气象列 {current.weather_columns} "
+                    f"与训练气象列 {weather} 不一致"
                 )
-            if range_feature_names is None:
-                range_feature_names = current_names
-            elif current_names != range_feature_names:
+            if feature_names is None:
+                feature_names = current.feature_names
+            elif current.feature_names != feature_names:
                 raise RuntimeError(f"{name} 的特征列与训练特征列不一致")
-            range_samples[name] = current_samples
-        if weather is None or range_feature_names is None:
+            range_data[name] = current
+        if weather is None or feature_names is None:
             raise RuntimeError("内部错误：未生成训练特征")
         print(
             "按文件日期范围完成流式样本构造："
-            f"train_rows={len(range_samples['train'][selected_horizons[0]]):,}, "
-            f"validation_rows={len(range_samples['validation'][selected_horizons[0]]):,}, "
-            f"test_rows={len(range_samples['test'][selected_horizons[0]]):,}"
+            f"train_rows={len(range_data['train'].origins):,}, "
+            f"validation_rows={len(range_data['validation'].origins):,}, "
+            f"test_rows={len(range_data['test'].origins):,}"
         )
-        sample_sets = None
-        sample_feature_names = None
+        feature_data = None
     else:
-        sample_sets, sample_feature_names, weather = build_sample_sets(
+        feature_data = build_feature_data(
             data,
             cfg,
             selected_horizons,
             require_target=True,
         )
+        feature_names = feature_data.feature_names
+        weather = feature_data.weather_columns
     output_dir = Path(cfg["output"]["checkpoint_dir"]).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     resolved_config_path = output_dir / "config_resolved.yaml"
@@ -202,28 +202,24 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
 
     metrics, test_predictions = [], []
     for horizon in selected_horizons:
-        if range_samples is not None:
-            if range_feature_names is None:
-                raise RuntimeError("内部错误：未生成日期范围特征列")
-            train_frame = range_samples["train"][horizon]
-            validation_frame = range_samples["validation"][horizon]
-            test_frame = range_samples["test"][horizon]
-            names = range_feature_names
+        if range_data is not None:
+            train_frame = range_data["train"].samples(horizon)
+            validation_frame = range_data["validation"].samples(horizon)
+            test_frame = range_data["test"].samples(horizon)
             total_samples = len(train_frame) + len(validation_frame) + len(test_frame)
         else:
-            if sample_sets is None or sample_feature_names is None:
+            if feature_data is None:
                 raise RuntimeError("内部错误：未构造训练样本")
-            samples = sample_sets[horizon]
-            names = sample_feature_names
+            samples = feature_data.samples(horizon)
             train_frame, validation_frame, test_frame = _split(samples, cfg)
             total_samples = len(samples)
         print(
             f"horizon={horizon:02d} 样本构造完成：total={total_samples:,}, "
             f"train={len(train_frame):,}, validation={len(validation_frame):,}, "
-            f"test={len(test_frame):,}, features={len(names)}"
+            f"test={len(test_frame):,}, features={len(feature_names)}"
         )
         fit_result = train_one(
-            train_frame, validation_frame, names, horizon, cfg, output_dir
+            train_frame, validation_frame, feature_names, horizon, cfg, output_dir
         )
         prediction = _predict_horizon(output_dir, test_frame, horizon, cfg)
         score = _metrics(test_frame["target_power"].to_numpy(), prediction)
@@ -232,7 +228,7 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
                 "horizon": horizon,
                 "minutes_ahead": horizon
                 * int(cfg["features"]["minutes_per_point"]),
-                "feature_count": len(names),
+                "feature_count": len(feature_names),
                 **fit_result,
                 "test_rmse": score["rmse"],
                 "test_mae": score["mae"],
@@ -254,7 +250,11 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
     metadata_path = output_dir / "metadata.json"
     metrics_df.to_csv(metrics_path, index=False)
     predictions_df.to_parquet(predictions_path, index=False)
-    delivery_paths = save_delivery_files(predictions_df, output_dir, cfg)
+    delivery_paths = save_delivery_frames(
+        delivery_frames(predictions_df, cfg, skip_incomplete=True),
+        output_dir,
+        cfg,
+    )
     metadata = {
         "artifact_version": 1,
         "model_type": "TabM",
@@ -340,10 +340,10 @@ def _validate_weather(
         raise ValueError(f"推理气象列 {weather} 与训练时 {expected_weather} 不一致")
 
 
-def _predict_sample_sets(
+def _predict_features(
     checkpoint_dir: Path,
     model_paths: list[Path],
-    sample_sets: dict[int, pd.DataFrame],
+    feature_data: FeatureData,
     config: Config,
     *,
     include_target: bool,
@@ -351,7 +351,7 @@ def _predict_sample_sets(
     outputs = []
     for model_path in model_paths:
         horizon = int(model_path.stem.removeprefix("model_h"))
-        samples = sample_sets[horizon]
+        samples = feature_data.samples(horizon)
         result_columns = ["timestamp", "target_timestamp"]
         if include_target:
             result_columns.append("target_power")
@@ -396,24 +396,24 @@ def predict(
         f"models={len(model_paths)}"
     )
     horizons = sorted(actual_horizons)
-    sample_sets, _, weather = build_sample_sets(
+    feature_data = build_feature_data(
         data,
         cfg,
         horizons,
         require_target=False,
     )
-    input_origins = pd.Index(sample_sets[horizons[0]]["timestamp"].unique())
+    input_origins = feature_data.origins
     if len(input_origins) != 1:
         raise ValueError(
             "predict() 只允许一个起报时刻；"
             f"当前发现 {len(input_origins)} 个：{input_origins.astype(str).tolist()}"
         )
-    _validate_weather(metadata, weather)
+    _validate_weather(metadata, feature_data.weather_columns)
     origin = input_origins[0]
-    result = _predict_sample_sets(
+    result = _predict_features(
         checkpoint_dir,
         model_paths,
-        sample_sets,
+        feature_data,
         cfg,
         include_target=False,
     )
@@ -427,7 +427,7 @@ def predict(
     return formatted
 
 
-def _evaluate(
+def _run_test(
     ckpt_path: str | Path, data: DataInput | None, config: ConfigInput
 ) -> tuple[Config, Path, pd.DataFrame, pd.DataFrame]:
     cfg = load_config(config)
@@ -448,18 +448,18 @@ def _evaluate(
     horizons = sorted(
         int(model_path.stem.removeprefix("model_h")) for model_path in model_paths
     )
-    sample_sets, _, weather = build_sample_sets(
+    feature_data = build_feature_data(
         data,
         cfg,
         horizons,
         require_target=True,
         date_range="test",
     )
-    _validate_weather(metadata, weather)
-    predictions = _predict_sample_sets(
+    _validate_weather(metadata, feature_data.weather_columns)
+    predictions = _predict_features(
         checkpoint_dir,
         model_paths,
-        sample_sets,
+        feature_data,
         cfg,
         include_target=True,
     )
@@ -476,25 +476,17 @@ def _evaluate(
             f"rmse={score['rmse']:.6f}, mae={score['mae']:.6f}"
         )
     print(
-        f"评估计算完成：prediction_rows={len(predictions):,}；"
-        "evaluate() 本身不保存，test() 会继续生成正式交付文件"
+        f"测试计算完成：prediction_rows={len(predictions):,}；"
+        "继续生成正式交付文件"
     )
     return cfg, checkpoint_dir, pd.DataFrame(metrics), predictions
-
-
-def evaluate(
-    ckpt_path: str | Path, data: DataInput | None, config: ConfigInput
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Evaluate a checkpoint on labeled data; return (metrics, predictions)."""
-    _, _, metrics, predictions = _evaluate(ckpt_path, data, config)
-    return metrics, predictions
 
 
 def test(
     ckpt_path: str | Path, data: DataInput | None, config: ConfigInput
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Evaluate, save original-format delivery files, and return delivery frames."""
-    cfg, checkpoint_dir, metrics, predictions = _evaluate(ckpt_path, data, config)
+    cfg, checkpoint_dir, metrics, predictions = _run_test(ckpt_path, data, config)
     frames = delivery_frames(predictions, cfg, skip_incomplete=True)
     save_delivery_frames(frames, checkpoint_dir, cfg)
     return metrics, combine_delivery_frames(frames)
