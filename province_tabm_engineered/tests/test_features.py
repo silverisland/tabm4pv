@@ -37,13 +37,16 @@ def test_build_inference_samples_without_future_target():
             "ghi_predict": [np.arange(2), np.array([10.0, 20.0])],
         }
     )
-    feature_data = build_feature_data(data, config, [2], require_target=False)
-    samples = feature_data.samples(2)
-    assert len(samples) == 1
-    assert "target_power" not in samples
-    assert samples.loc[0, "target_timestamp"] == timestamp + pd.Timedelta(minutes=30)
-    assert samples.loc[0, "weighted__ghi_predict__mean"] == 20.0
-    assert feature_data.feature_names[:4] == [
+    features, columns, _ = build_feature_data(
+        data, config, [2], require_target=False
+    )
+    assert len(features) == 1
+    assert "target_power__h02" not in features
+    assert features.loc[0, "target_timestamp__h02"] == timestamp + pd.Timedelta(
+        minutes=30
+    )
+    assert features.loc[0, "weighted__ghi_predict__mean__h02"] == 20.0
+    assert columns[2][:4] == [
         "power_lag_4",
         "power_lag_3",
         "power_lag_2",
@@ -100,33 +103,28 @@ def test_v2_feature_values_match_original_recipe():
         }
     )
 
-    feature_data = build_feature_data(data, config, [2], require_target=True)
-    samples = feature_data.samples(2)
-    names = feature_data.feature_names
+    features, columns, _ = build_feature_data(data, config, [2], require_target=True)
+    names = columns[2]
 
-    assert feature_data.common.columns.tolist() == names[:4]
-    assert not any(
-        column.startswith("power_lag_")
-        for column in feature_data.horizons[2].columns
-    )
+    assert features.filter(like="power_lag_").columns.tolist() == names[:4]
 
     assert names == [
         "power_lag_4",
         "power_lag_3",
         "power_lag_2",
         "power_lag_1",
-        "weighted__ghi_predict__capacity_coverage",
-        "weighted__ghi_predict__mean",
-        "time__hour_sin",
-        "time__hour_cos",
+        "weighted__ghi_predict__capacity_coverage__h02",
+        "weighted__ghi_predict__mean__h02",
+        "time__hour_sin__h02",
+        "time__hour_cos__h02",
     ]
-    np.testing.assert_allclose(samples.loc[0, names[:4]], [1.0, 2.0, 3.0, 4.0])
-    assert samples.loc[0, "weighted__ghi_predict__capacity_coverage"] == 0.25
-    assert samples.loc[0, "weighted__ghi_predict__mean"] == 20.0
-    assert samples.loc[0, "target_power"] == 60.0
+    np.testing.assert_allclose(features.loc[0, names[:4]], [1.0, 2.0, 3.0, 4.0])
+    assert features.loc[0, "weighted__ghi_predict__capacity_coverage__h02"] == 0.25
+    assert features.loc[0, "weighted__ghi_predict__mean__h02"] == 20.0
+    assert features.loc[0, "target_power__h02"] == 60.0
     expected_hour = 6.5
     np.testing.assert_allclose(
-        samples.loc[0, ["time__hour_sin", "time__hour_cos"]],
+        features.loc[0, ["time__hour_sin__h02", "time__hour_cos__h02"]],
         [np.sin(2 * np.pi * expected_hour / 24), np.cos(2 * np.pi * expected_hour / 24)],
         rtol=1e-6,
     )

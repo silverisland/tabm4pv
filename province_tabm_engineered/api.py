@@ -17,7 +17,7 @@ from .delivery import (
     expected_horizons,
     save_delivery_frames,
 )
-from .features import FeatureData, build_feature_data
+from .features import build_feature_data
 from .model import infer_array, load_one, resolve_device, seed_everything, train_one, transform
 
 
@@ -123,6 +123,29 @@ def _metrics(target: np.ndarray, prediction: np.ndarray) -> dict[str, float]:
     }
 
 
+def _select_horizon(
+    data: pd.DataFrame,
+    feature_columns: dict[int, list[str]],
+    horizon: int,
+    *,
+    require_target: bool,
+) -> pd.DataFrame:
+    suffix = f"__h{horizon:02d}"
+    target_time = f"target_timestamp{suffix}"
+    target = f"target_power{suffix}"
+    columns = ["timestamp", target_time, *feature_columns[horizon]]
+    if require_target:
+        if target not in data:
+            raise KeyError(f"训练/测试数据缺少列: {target}")
+        columns.append(target)
+    result = data[columns].rename(
+        columns={target_time: "target_timestamp", target: "target_power"}
+    )
+    if require_target:
+        result = result.dropna(subset=["target_power"])
+    return result.reset_index(drop=True)
+
+
 def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
     """Train all configured horizons and return artifact paths and metrics."""
     cfg = load_config(config)
@@ -147,13 +170,13 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
         )
     seed_everything(int(cfg["training"]["seed"]))
     selected_horizons = _horizons(cfg)
-    range_data: dict[str, FeatureData] | None = None
-    if has_date_ranges(cfg):
-        range_data = {}
+    use_date_ranges = has_date_ranges(cfg)
+    if use_date_ranges:
+        parts: list[pd.DataFrame] = []
         weather: list[str] | None = None
-        feature_names: list[str] | None = None
+        feature_columns: dict[int, list[str]] | None = None
         for name in ("train", "validation", "test"):
-            current = build_feature_data(
+            current, current_columns, current_weather = build_feature_data(
                 data,
                 cfg,
                 selected_horizons,
@@ -161,35 +184,37 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
                 date_range=name,
             )
             if weather is None:
-                weather = current.weather_columns
-            elif current.weather_columns != weather:
+                weather = current_weather
+            elif current_weather != weather:
                 raise ValueError(
-                    f"{name} 气象列 {current.weather_columns} "
+                    f"{name} 气象列 {current_weather} "
                     f"与训练气象列 {weather} 不一致"
                 )
-            if feature_names is None:
-                feature_names = current.feature_names
-            elif current.feature_names != feature_names:
+            if feature_columns is None:
+                feature_columns = current_columns
+            elif current_columns != feature_columns:
                 raise RuntimeError(f"{name} 的特征列与训练特征列不一致")
-            range_data[name] = current
-        if weather is None or feature_names is None:
+            current["__split"] = name
+            parts.append(current)
+        if weather is None or feature_columns is None:
             raise RuntimeError("内部错误：未生成训练特征")
+        data_frame = pd.concat(parts, ignore_index=True).sort_values(
+            "timestamp", ignore_index=True
+        )
+        counts = data_frame["__split"].value_counts()
         print(
             "按文件日期范围完成流式样本构造："
-            f"train_rows={len(range_data['train'].origins):,}, "
-            f"validation_rows={len(range_data['validation'].origins):,}, "
-            f"test_rows={len(range_data['test'].origins):,}"
+            f"train_rows={counts.get('train', 0):,}, "
+            f"validation_rows={counts.get('validation', 0):,}, "
+            f"test_rows={counts.get('test', 0):,}"
         )
-        feature_data = None
     else:
-        feature_data = build_feature_data(
+        data_frame, feature_columns, weather = build_feature_data(
             data,
             cfg,
             selected_horizons,
             require_target=True,
         )
-        feature_names = feature_data.feature_names
-        weather = feature_data.weather_columns
     output_dir = Path(cfg["output"]["checkpoint_dir"]).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     resolved_config_path = output_dir / "config_resolved.yaml"
@@ -202,24 +227,40 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
 
     metrics, test_predictions = [], []
     for horizon in selected_horizons:
-        if range_data is not None:
-            train_frame = range_data["train"].samples(horizon)
-            validation_frame = range_data["validation"].samples(horizon)
-            test_frame = range_data["test"].samples(horizon)
+        horizon_columns = feature_columns[horizon]
+        if use_date_ranges:
+            train_frame = _select_horizon(
+                data_frame[data_frame["__split"].eq("train")],
+                feature_columns,
+                horizon,
+                require_target=True,
+            )
+            validation_frame = _select_horizon(
+                data_frame[data_frame["__split"].eq("validation")],
+                feature_columns,
+                horizon,
+                require_target=True,
+            )
+            test_frame = _select_horizon(
+                data_frame[data_frame["__split"].eq("test")],
+                feature_columns,
+                horizon,
+                require_target=True,
+            )
             total_samples = len(train_frame) + len(validation_frame) + len(test_frame)
         else:
-            if feature_data is None:
-                raise RuntimeError("内部错误：未构造训练样本")
-            samples = feature_data.samples(horizon)
+            samples = _select_horizon(
+                data_frame, feature_columns, horizon, require_target=True
+            )
             train_frame, validation_frame, test_frame = _split(samples, cfg)
             total_samples = len(samples)
         print(
             f"horizon={horizon:02d} 样本构造完成：total={total_samples:,}, "
             f"train={len(train_frame):,}, validation={len(validation_frame):,}, "
-            f"test={len(test_frame):,}, features={len(feature_names)}"
+            f"test={len(test_frame):,}, features={len(horizon_columns)}"
         )
         fit_result = train_one(
-            train_frame, validation_frame, feature_names, horizon, cfg, output_dir
+            train_frame, validation_frame, horizon_columns, horizon, cfg, output_dir
         )
         prediction = _predict_horizon(output_dir, test_frame, horizon, cfg)
         score = _metrics(test_frame["target_power"].to_numpy(), prediction)
@@ -228,7 +269,7 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
                 "horizon": horizon,
                 "minutes_ahead": horizon
                 * int(cfg["features"]["minutes_per_point"]),
-                "feature_count": len(feature_names),
+                "feature_count": len(horizon_columns),
                 **fit_result,
                 "test_rmse": score["rmse"],
                 "test_mae": score["mae"],
@@ -314,10 +355,14 @@ def _predict_horizon(
     model_path = checkpoint_dir / "models" / f"model_h{horizon:02d}.pt"
     model, preprocessor, payload = load_one(model_path, checkpoint_dir, device)
     names = list(payload["feature_names"])
-    missing = sorted(set(names).difference(samples.columns))
+    selected = [
+        name if name in samples else f"{name}__h{horizon:02d}"
+        for name in names
+    ]
+    missing = [name for name, actual in zip(names, selected) if actual not in samples]
     if missing:
         raise RuntimeError(f"推理特征与 checkpoint 不一致，缺少: {missing}")
-    x = transform(preprocessor, samples[names].to_numpy(dtype=np.float32))
+    x = transform(preprocessor, samples[selected].to_numpy(dtype=np.float32))
     lower, upper = map(float, config["model"]["prediction_clip"])
     return np.clip(
         infer_array(
@@ -343,7 +388,8 @@ def _validate_weather(
 def _predict_features(
     checkpoint_dir: Path,
     model_paths: list[Path],
-    feature_data: FeatureData,
+    data: pd.DataFrame,
+    feature_columns: dict[int, list[str]],
     config: Config,
     *,
     include_target: bool,
@@ -351,7 +397,12 @@ def _predict_features(
     outputs = []
     for model_path in model_paths:
         horizon = int(model_path.stem.removeprefix("model_h"))
-        samples = feature_data.samples(horizon)
+        samples = _select_horizon(
+            data,
+            feature_columns,
+            horizon,
+            require_target=include_target,
+        )
         result_columns = ["timestamp", "target_timestamp"]
         if include_target:
             result_columns.append("target_power")
@@ -396,24 +447,25 @@ def predict(
         f"models={len(model_paths)}"
     )
     horizons = sorted(actual_horizons)
-    feature_data = build_feature_data(
+    data_frame, feature_columns, weather = build_feature_data(
         data,
         cfg,
         horizons,
         require_target=False,
     )
-    input_origins = feature_data.origins
+    input_origins = pd.Index(data_frame["timestamp"].unique())
     if len(input_origins) != 1:
         raise ValueError(
             "predict() 只允许一个起报时刻；"
             f"当前发现 {len(input_origins)} 个：{input_origins.astype(str).tolist()}"
         )
-    _validate_weather(metadata, feature_data.weather_columns)
+    _validate_weather(metadata, weather)
     origin = input_origins[0]
     result = _predict_features(
         checkpoint_dir,
         model_paths,
-        feature_data,
+        data_frame,
+        feature_columns,
         cfg,
         include_target=False,
     )
@@ -448,18 +500,19 @@ def _run_test(
     horizons = sorted(
         int(model_path.stem.removeprefix("model_h")) for model_path in model_paths
     )
-    feature_data = build_feature_data(
+    data_frame, feature_columns, weather = build_feature_data(
         data,
         cfg,
         horizons,
         require_target=True,
         date_range="test",
     )
-    _validate_weather(metadata, feature_data.weather_columns)
+    _validate_weather(metadata, weather)
     predictions = _predict_features(
         checkpoint_dir,
         model_paths,
-        feature_data,
+        data_frame,
+        feature_columns,
         cfg,
         include_target=True,
     )

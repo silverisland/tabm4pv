@@ -148,7 +148,7 @@ def test_streamed_samples_match_full_frame_recipe(tmp_path: Path):
     for day in ("2026-08-01", "2026-08-02"):
         _feature_frame(day).to_parquet(tmp_path / f"plantid={day}.parquet")
 
-    streamed = build_feature_data(
+    streamed, streamed_columns, weather = build_feature_data(
         None,
         config,
         [1, 2],
@@ -157,16 +157,13 @@ def test_streamed_samples_match_full_frame_recipe(tmp_path: Path):
     )
     full_frame = _loaded_frame(None, config, date_range="train")
 
-    expected = build_feature_data(
+    expected, expected_columns, expected_weather = build_feature_data(
         full_frame, config, [1, 2], require_target=True
     )
 
-    assert streamed.weather_columns == expected.weather_columns == ["ghi_predict"]
-    assert streamed.feature_names == expected.feature_names
-    for horizon in (1, 2):
-        pd.testing.assert_frame_equal(
-            streamed.samples(horizon), expected.samples(horizon)
-        )
+    assert weather == expected_weather == ["ghi_predict"]
+    assert streamed_columns == expected_columns
+    pd.testing.assert_frame_equal(streamed, expected)
 
 
 def test_filename_date_must_match_content_date(tmp_path: Path):
