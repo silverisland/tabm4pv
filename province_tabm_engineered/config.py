@@ -53,6 +53,8 @@ def validate_config(config: Config) -> None:
         ("timestamp", "station", "capacity", "power_history", "power_future"),
     )
     _positive(data["province_capacity"], "data.province_capacity")
+    if not isinstance(data.get("validate_file_content_date", True), bool):
+        raise ValueError("config.data.validate_file_content_date 必须是布尔值")
     date_ranges = data.get("date_ranges")
     if date_ranges:
         _require_keys(date_ranges, "data.date_ranges", ("train", "validation", "test"))

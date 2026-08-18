@@ -79,6 +79,7 @@ data:
   file_glob: "plantid=*.parquet"
   file_date_regex: "plantid=(\\d{4}-\\d{2}-\\d{2})\\.parquet$"
   strict_file_dates: true
+  validate_file_content_date: true
   date_ranges:
     train:
       start: 2026-06-01
@@ -97,6 +98,8 @@ data:
 - `test(ckpt, None, config)` 只读取 `test` 范围；
 - 直接传入 DataFrame 时，使用配置的 timestamp 列按日期执行相同过滤；
 - `date_ranges: null` 时继续使用旧的 `training.split` 自动切分。
+
+目录输入会逐文件完成容量覆盖、数据校验和全部时效的加权气象特征，只拼接体积较小的省级样本，文件处理完后即释放场站级原始数据。为保证结果与全量计算一致，同一起报时刻不能跨文件出现；`validate_file_content_date: true` 还会校验文件名日期与文件内起报日期一致。
 
 训练和推理可以使用不同设备；只需分别在配置中设置 `model.device` 为 `cpu`、`cuda:0` 或 `auto`。模型结构与特征配置应保持一致。
 
