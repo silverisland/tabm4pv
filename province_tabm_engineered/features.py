@@ -38,6 +38,19 @@ def province_table(data: pd.DataFrame, config: Config) -> pd.DataFrame:
     return rows
 
 
+def _plant_table(data: pd.DataFrame, config: Config) -> pd.DataFrame:
+    data_cfg = config["data"]
+    names = data_cfg["columns"]
+    timestamp, station = names["timestamp"], names["station"]
+    plant_pattern = re.compile(data_cfg["plant_station_pattern"])
+    return (
+        data[data[station].map(lambda value: bool(plant_pattern.fullmatch(str(value))))]
+        .sort_values([timestamp, station, "source_file"])
+        .drop_duplicates([timestamp, station], keep="last")
+        .copy()
+    )
+
+
 def weighted_weather_features(
     station_rows: pd.DataFrame,
     origins: pd.DatetimeIndex,
@@ -47,13 +60,8 @@ def weighted_weather_features(
 ) -> pd.DataFrame:
     names = config["data"]["columns"]
     timestamp = names["timestamp"]
-    station = names["station"]
     capacity_col = names["capacity"]
-    rows = (
-        station_rows.sort_values([timestamp, station, "source_file"])
-        .drop_duplicates([timestamp, station], keep="last")
-        .copy()
-    )
+    rows = station_rows.copy()
     capacity = pd.to_numeric(rows[capacity_col], errors="coerce")
     rows["__capacity"] = capacity.where(capacity > 0)
     total_capacity = rows.groupby(timestamp)["__capacity"].sum(min_count=1)
@@ -101,11 +109,17 @@ def build_samples(
     columns: list[str],
     *,
     require_target: bool,
+    tables: tuple[pd.DataFrame, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
+    """Build one horizon, optionally reusing prepared province and plant tables."""
+    if tables is None:
+        province = province_table(data, config)
+        station_rows = _plant_table(data, config)
+    else:
+        province, station_rows = tables
     data_cfg, feature_cfg = config["data"], config["features"]
     names = data_cfg["columns"]
-    timestamp, station = names["timestamp"], names["station"]
-    province = province_table(data, config)
+    timestamp = names["timestamp"]
     origins = pd.DatetimeIndex(province[timestamp])
     history_length = int(feature_cfg["history_length"])
     histories = np.stack(
@@ -116,10 +130,6 @@ def build_samples(
     feature_names = [f"power_lag_{lag}" for lag in range(history_length, 0, -1)]
     features = pd.DataFrame(histories, index=origins, columns=feature_names)
 
-    plant_pattern = re.compile(data_cfg["plant_station_pattern"])
-    station_rows = data[
-        data[station].map(lambda value: bool(plant_pattern.fullmatch(str(value))))
-    ]
     weather = weighted_weather_features(
         station_rows, origins, columns, horizon - 1, config
     )
@@ -159,12 +169,12 @@ def build_sample_sets(
     *,
     require_target: bool,
     date_range: str | None = None,
-) -> tuple[dict[int, pd.DataFrame], dict[int, list[str]], list[str]]:
+) -> tuple[dict[int, pd.DataFrame], list[str], list[str]]:
     """Build all requested horizons while each raw parquet file is in memory."""
     if not horizons:
         raise ValueError("horizons 不能为空")
     batches: dict[int, list[pd.DataFrame]] = {horizon: [] for horizon in horizons}
-    feature_names: dict[int, list[str]] = {}
+    feature_names: list[str] | None = None
     selected_weather: list[str] | None = None
     seen_origins: dict[pd.Timestamp, str] = {}
     names = config["data"]["columns"]
@@ -185,6 +195,7 @@ def build_sample_sets(
             )
 
         province = province_table(frame, config)
+        station_rows = _plant_table(frame, config)
         source_file = str(province["source_file"].iloc[0])
         origins = pd.DatetimeIndex(province[timestamp_col])
         overlap = sorted(set(origins).intersection(seen_origins))
@@ -210,9 +221,11 @@ def build_sample_sets(
                 horizon,
                 selected_weather,
                 require_target=require_target,
+                tables=(province, station_rows),
             )
-            expected_names = feature_names.setdefault(horizon, current_names)
-            if current_names != expected_names:
+            if feature_names is None:
+                feature_names = current_names
+            elif current_names != feature_names:
                 raise RuntimeError(
                     f"horizon={horizon} 在不同文件中生成的特征列不一致"
                 )
@@ -221,9 +234,9 @@ def build_sample_sets(
             f"单文件全部时效特征构造完成：file={source_file}, "
             f"origins={len(origins):,}, horizons={horizons}"
         )
-        del frame, province
+        del frame, province, station_rows
 
-    if selected_weather is None:
+    if selected_weather is None or feature_names is None:
         raise ValueError("输入数据为空，无法构造特征")
     result: dict[int, pd.DataFrame] = {}
     for horizon, frames in batches.items():

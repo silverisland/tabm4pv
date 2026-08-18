@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from province_tabm_engineered.data import load_data
+from province_tabm_engineered.data import iter_data_frames
 from province_tabm_engineered.features import build_sample_sets, build_samples
 
 
@@ -49,19 +49,34 @@ def _frame(day: str) -> pd.DataFrame:
     )
 
 
+def _loaded_frame(
+    data: pd.DataFrame | None,
+    config: dict,
+    *,
+    date_range: str,
+) -> pd.DataFrame:
+    return pd.concat(
+        list(
+            iter_data_frames(
+                data,
+                config,
+                require_target=True,
+                date_range=date_range,
+            )
+        ),
+        ignore_index=True,
+    )
+
+
 def test_directory_files_are_selected_by_filename_date(tmp_path: Path):
     config = _config(tmp_path)
     for day in pd.date_range("2026-08-01", periods=5, freq="D"):
         day_text = day.strftime("%Y-%m-%d")
         _frame(day_text).to_parquet(tmp_path / f"plantid={day_text}.parquet")
 
-    train = load_data(
-        None, config, require_target=True, date_range="train"
-    )
-    validation = load_data(
-        None, config, require_target=True, date_range="validation"
-    )
-    test = load_data(None, config, require_target=True, date_range="test")
+    train = _loaded_frame(None, config, date_range="train")
+    validation = _loaded_frame(None, config, date_range="validation")
+    test = _loaded_frame(None, config, date_range="test")
 
     assert train["timestamp_win"].dt.strftime("%Y-%m-%d").tolist() == [
         "2026-08-01",
@@ -82,9 +97,7 @@ def test_dataframe_is_selected_by_timestamp_date(tmp_path: Path):
         [_frame(day.strftime("%Y-%m-%d")) for day in pd.date_range("2026-08-01", periods=5)],
         ignore_index=True,
     )
-    selected = load_data(
-        data, config, require_target=True, date_range="validation"
-    )
+    selected = _loaded_frame(data, config, date_range="validation")
     assert selected["timestamp_win"].tolist() == [pd.Timestamp("2026-08-03")]
 
 
@@ -143,12 +156,7 @@ def test_streamed_samples_match_full_frame_recipe(tmp_path: Path):
         require_target=True,
         date_range="train",
     )
-    full_frame = load_data(
-        None,
-        config,
-        require_target=True,
-        date_range="train",
-    )
+    full_frame = _loaded_frame(None, config, date_range="train")
 
     assert weather == ["ghi_predict"]
     for horizon in (1, 2):
@@ -159,7 +167,7 @@ def test_streamed_samples_match_full_frame_recipe(tmp_path: Path):
             weather,
             require_target=True,
         )
-        assert streamed_names[horizon] == expected_names
+        assert streamed_names == expected_names
         pd.testing.assert_frame_equal(streamed[horizon], expected)
 
 

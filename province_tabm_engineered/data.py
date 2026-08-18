@@ -234,33 +234,6 @@ def iter_data_frames(
         del frame
 
 
-def load_data(
-    data: DataInput | None,
-    config: Config,
-    *,
-    require_target: bool,
-    date_range: str | None = None,
-) -> pd.DataFrame:
-    """Load a DataFrame, parquet file, directory, or a sequence of parquet files."""
-    frames = list(
-        iter_data_frames(
-            data,
-            config,
-            require_target=require_target,
-            date_range=date_range,
-        )
-    )
-    frame = pd.concat(frames, ignore_index=True)
-    cols = config["data"]["columns"]
-    timestamp_col, station_col = cols["timestamp"], cols["station"]
-    print(
-        "数据校验完成："
-        f"rows={len(frame):,}, stations={frame[station_col].nunique():,}, "
-        f"time_range=[{frame[timestamp_col].min()}, {frame[timestamp_col].max()}]"
-    )
-    return frame
-
-
 def array_at(value: object, index: int) -> float:
     try:
         values = np.asarray(value, dtype=np.float32).reshape(-1)

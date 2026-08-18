@@ -150,10 +150,9 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
     seed_everything(int(cfg["training"]["seed"]))
     selected_horizons = _horizons(cfg)
     range_samples: dict[str, dict[int, pd.DataFrame]] | None = None
-    range_feature_names: dict[str, dict[int, list[str]]] | None = None
+    range_feature_names: list[str] | None = None
     if has_date_ranges(cfg):
         range_samples = {}
-        range_feature_names = {}
         weather: list[str] | None = None
         for name in ("train", "validation", "test"):
             current_samples, current_names, current_weather = build_sample_sets(
@@ -169,10 +168,13 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
                 raise ValueError(
                     f"{name} 气象列 {current_weather} 与训练气象列 {weather} 不一致"
                 )
+            if range_feature_names is None:
+                range_feature_names = current_names
+            elif current_names != range_feature_names:
+                raise RuntimeError(f"{name} 的特征列与训练特征列不一致")
             range_samples[name] = current_samples
-            range_feature_names[name] = current_names
-        if weather is None:
-            raise RuntimeError("内部错误：未生成训练气象列")
+        if weather is None or range_feature_names is None:
+            raise RuntimeError("内部错误：未生成训练特征")
         print(
             "按文件日期范围完成流式样本构造："
             f"train_rows={len(range_samples['train'][selected_horizons[0]]):,}, "
@@ -200,23 +202,19 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
 
     metrics, test_predictions = [], []
     for horizon in selected_horizons:
-        if range_samples is not None and range_feature_names is not None:
+        if range_samples is not None:
+            if range_feature_names is None:
+                raise RuntimeError("内部错误：未生成日期范围特征列")
             train_frame = range_samples["train"][horizon]
             validation_frame = range_samples["validation"][horizon]
             test_frame = range_samples["test"][horizon]
-            names = range_feature_names["train"][horizon]
-            validation_names = range_feature_names["validation"][horizon]
-            test_names = range_feature_names["test"][horizon]
-            if validation_names != names or test_names != names:
-                raise RuntimeError(
-                    f"horizon={horizon} 的训练、验证、测试特征列不一致"
-                )
+            names = range_feature_names
             total_samples = len(train_frame) + len(validation_frame) + len(test_frame)
         else:
             if sample_sets is None or sample_feature_names is None:
                 raise RuntimeError("内部错误：未构造训练样本")
             samples = sample_sets[horizon]
-            names = sample_feature_names[horizon]
+            names = sample_feature_names
             train_frame, validation_frame, test_frame = _split(samples, cfg)
             total_samples = len(samples)
         print(
@@ -411,6 +409,7 @@ def predict(
             f"当前发现 {len(input_origins)} 个：{input_origins.astype(str).tolist()}"
         )
     _validate_weather(metadata, weather)
+    origin = input_origins[0]
     result = _predict_sample_sets(
         checkpoint_dir,
         model_paths,
@@ -418,21 +417,19 @@ def predict(
         cfg,
         include_target=False,
     )
-    origins = pd.Index(result["timestamp"].unique())
     formatted = next(
         iter(delivery_frames(result, cfg, skip_incomplete=False).values())
     )
     print(
-        f"推理任务完成：origin={origins[0]}, rows={len(formatted):,}, "
+        f"推理任务完成：origin={origin}, rows={len(formatted):,}, "
         f"columns={formatted.columns.tolist()}；不保存本地文件"
     )
     return formatted
 
 
-def evaluate(
+def _evaluate(
     ckpt_path: str | Path, data: DataInput | None, config: ConfigInput
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Evaluate a checkpoint on labeled data; return (metrics, predictions)."""
+) -> tuple[Config, Path, pd.DataFrame, pd.DataFrame]:
     cfg = load_config(config)
     _print_common_parameters("测试", config, cfg)
     checkpoint_dir, model_paths, metadata = _checkpoint(ckpt_path)
@@ -482,16 +479,22 @@ def evaluate(
         f"评估计算完成：prediction_rows={len(predictions):,}；"
         "evaluate() 本身不保存，test() 会继续生成正式交付文件"
     )
-    return pd.DataFrame(metrics), predictions
+    return cfg, checkpoint_dir, pd.DataFrame(metrics), predictions
+
+
+def evaluate(
+    ckpt_path: str | Path, data: DataInput | None, config: ConfigInput
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Evaluate a checkpoint on labeled data; return (metrics, predictions)."""
+    _, _, metrics, predictions = _evaluate(ckpt_path, data, config)
+    return metrics, predictions
 
 
 def test(
     ckpt_path: str | Path, data: DataInput | None, config: ConfigInput
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Evaluate, save original-format delivery files, and return delivery frames."""
-    cfg = load_config(config)
-    checkpoint_dir, _, _ = _checkpoint(ckpt_path)
-    metrics, predictions = evaluate(ckpt_path, data, config)
+    cfg, checkpoint_dir, metrics, predictions = _evaluate(ckpt_path, data, config)
     frames = delivery_frames(predictions, cfg, skip_incomplete=True)
     save_delivery_frames(frames, checkpoint_dir, cfg)
     return metrics, combine_delivery_frames(frames)
