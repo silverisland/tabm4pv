@@ -105,6 +105,7 @@ def train_one(
     train_frame: pd.DataFrame,
     validation_frame: pd.DataFrame,
     feature_names: list[str],
+    target_name: str,
     horizon: int,
     config: Config,
     checkpoint_dir: Path,
@@ -114,10 +115,8 @@ def train_one(
     device = resolve_device(model_cfg.get("device", "auto"))
     x_train_raw = train_frame[feature_names].to_numpy(dtype=np.float32)
     x_val_raw = validation_frame[feature_names].to_numpy(dtype=np.float32)
-    y_train = np.array(train_frame["target_power"], dtype=np.float32, copy=True)
-    y_val = validation_frame["target_power"].to_numpy(dtype=np.float32)
-    if not len(train_frame) or not len(validation_frame):
-        raise ValueError(f"horizon={horizon} 的训练集或验证集为空")
+    y_train = np.array(train_frame[target_name], dtype=np.float32, copy=True)
+    y_val = validation_frame[target_name].to_numpy(dtype=np.float32)
     print(
         f"horizon={horizon:02d} 开始训练：device={device}, "
         f"features={len(feature_names)}, train={len(train_frame):,}, "

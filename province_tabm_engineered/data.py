@@ -19,10 +19,7 @@ def has_date_ranges(config: Config) -> bool:
 
 
 def _date_bounds(config: Config, range_name: str) -> tuple[pd.Timestamp, pd.Timestamp]:
-    ranges = config["data"].get("date_ranges")
-    if not ranges or range_name not in ranges:
-        raise ValueError(f"config.data.date_ranges 缺少范围: {range_name}")
-    selected = ranges[range_name]
+    selected = config["data"]["date_ranges"][range_name]
     return (
         pd.Timestamp(selected["start"]).normalize(),
         pd.Timestamp(selected["end"]).normalize(),
@@ -33,20 +30,12 @@ def _filter_paths_by_date(
     paths: list[Path], config: Config, range_name: str
 ) -> list[Path]:
     start, end = _date_bounds(config, range_name)
-    selected: list[Path] = []
-    unmatched: list[str] = []
-    for path in paths:
-        file_date = _filename_date(path, config)
-        if file_date is None:
-            unmatched.append(path.name)
-            continue
-        if start <= file_date <= end:
-            selected.append(path)
-    if unmatched and config["data"].get("strict_file_dates", True):
-        raise ValueError(
-            "以下 parquet 文件名无法提取日期，请检查 data.file_date_regex："
-            f"{unmatched[:10]}"
-        )
+    selected = [
+        path
+        for path in paths
+        if (file_date := _filename_date(path, config)) is not None
+        and start <= file_date <= end
+    ]
     if not selected:
         raise FileNotFoundError(
             f"{range_name} 日期范围 [{start.date()}, {end.date()}] 没有匹配文件"
@@ -76,11 +65,6 @@ def _filter_frame_by_date(
     timestamps = pd.to_datetime(frame[timestamp_col], errors="coerce")
     day = timestamps.dt.normalize()
     selected = frame[(day >= start) & (day <= end)].copy()
-    if selected.empty:
-        raise ValueError(
-            f"DataFrame 在 {range_name} 日期范围 "
-            f"[{start.date()}, {end.date()}] 内没有数据"
-        )
     print(
         f"{range_name} DataFrame 筛选：date_range=[{start.date()}, {end.date()}], "
         f"rows={len(selected):,}"
@@ -116,72 +100,32 @@ def _prepare_frame(
     frame: pd.DataFrame,
     config: Config,
     *,
-    require_target: bool,
-    source_label: str,
     capacity_mapping: pd.Series | None,
 ) -> pd.DataFrame:
     data_cfg = config["data"]
     cols = data_cfg["columns"]
     frame = frame.copy()
 
-    required = [cols["timestamp"], cols["station"], cols["power_history"]]
-    if capacity_mapping is None:
-        required.append(cols["capacity"])
-    if require_target:
-        required.append(cols["power_future"])
-    missing = sorted(set(required).difference(frame.columns))
-    if missing:
-        raise KeyError(f"输入数据缺少列: {missing}")
-
     if capacity_mapping is not None:
-        # Preserve the original recipe: when a capacity table is configured,
-        # station capacities come exclusively from that table.
         frame[cols["capacity"]] = frame[cols["station"]].map(capacity_mapping)
 
     timestamp_col, station_col = cols["timestamp"], cols["station"]
     frame[timestamp_col] = pd.to_datetime(frame[timestamp_col], errors="coerce")
-    if frame[timestamp_col].isna().any():
-        raise ValueError(f"{timestamp_col!r} 包含无效时间: {source_label}")
     frame[station_col] = frame[station_col].astype("string").str.strip().str.lower()
     province = data_cfg["province_station"]
     frame.loc[frame[station_col].eq(province), cols["capacity"]] = data_cfg[
         "province_capacity"
     ]
-    pattern = re.compile(data_cfg["plant_station_pattern"])
-    valid = frame[station_col].eq(province) | frame[station_col].str.fullmatch(
-        pattern, na=False
-    )
-    if not valid.all():
-        bad = frame.loc[~valid, station_col].dropna().unique().tolist()
-        raise ValueError(f"发现非法 station 标识: {bad[:10]}，source={source_label}")
     return frame
-
-
-def _validate_file_content_date(
-    frame: pd.DataFrame, path: Path, config: Config
-) -> None:
-    file_date = _filename_date(path, config)
-    if file_date is None:
-        return
-    timestamp_col = config["data"]["columns"]["timestamp"]
-    content_dates = pd.DatetimeIndex(frame[timestamp_col]).normalize().unique()
-    mismatched = content_dates[content_dates != file_date]
-    if len(mismatched):
-        values = [str(value.date()) for value in mismatched[:10]]
-        raise ValueError(
-            f"文件 {path.name} 的文件名日期为 {file_date.date()}，"
-            f"但包含其他起报日期: {values}"
-        )
 
 
 def iter_data_frames(
     data: DataInput | None,
     config: Config,
     *,
-    require_target: bool,
     date_range: str | None = None,
 ) -> Iterator[pd.DataFrame]:
-    """Yield validated frames one at a time so callers can release raw station rows."""
+    """Yield input frames one at a time so callers can release raw station rows."""
     data_cfg = config["data"]
     source = data if data is not None else data_cfg.get("path")
     if source is None:
@@ -195,8 +139,6 @@ def iter_data_frames(
         frame = _prepare_frame(
             frame,
             config,
-            require_target=require_target,
-            source_label="<dataframe>",
             capacity_mapping=capacity_mapping,
         )
         print(f"已接收 DataFrame：rows={len(frame):,}, columns={len(frame.columns)}")
@@ -212,13 +154,10 @@ def iter_data_frames(
         frame = _prepare_frame(
             pd.read_parquet(path),
             config,
-            require_target=require_target,
-            source_label=path.name,
             capacity_mapping=capacity_mapping,
         )
-        _validate_file_content_date(frame, path, config)
         print(
-            f"parquet [{index}/{len(paths)}] 读取并校验完成："
+            f"parquet [{index}/{len(paths)}] 读取完成："
             f"file={path.name}, rows={len(frame):,}"
         )
         yield frame

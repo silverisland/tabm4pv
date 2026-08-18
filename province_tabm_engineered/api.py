@@ -9,314 +9,95 @@ import numpy as np
 import pandas as pd
 
 from .config import Config, ConfigInput, dump_config, load_config
-from .data import DataInput, has_date_ranges
+from .data import DataInput
 from .delivery import (
     INTERNAL_PREDICTION_COLUMN,
     combine_delivery_frames,
     delivery_frames,
-    expected_horizons,
     save_delivery_frames,
 )
 from .features import build_feature_data
 from .model import infer_array, load_one, resolve_device, seed_everything, train_one, transform
 
 
-def _config_source(config: ConfigInput) -> str:
-    if isinstance(config, Mapping):
-        return "<Python mapping>"
-    return str(Path(config).expanduser().resolve())
-
-
-def _print_common_parameters(task: str, config_input: ConfigInput, config: Config) -> None:
-    data = config["data"]
-    features = config["features"]
-    model = config["model"]
-    capacity_csv = data.get("capacity_csv")
-    if capacity_csv:
-        capacity_csv = str(Path(capacity_csv).expanduser().resolve())
-    else:
-        capacity_csv = "<使用输入数据容量列>"
-
-    print(f"{task}参数[config]：source={_config_source(config_input)}")
+def _print_config(task: str, source: ConfigInput, config: Config) -> None:
+    source_text = (
+        "<Python mapping>"
+        if isinstance(source, Mapping)
+        else str(Path(source).expanduser().resolve())
+    )
+    print(f"{task}参数：config={source_text}")
     print(
-        f"{task}参数[data]：province_station={data['province_station']}, "
-        f"province_capacity={data['province_capacity']}, "
-        f"capacity_csv={capacity_csv}, columns={data['columns']}, "
-        f"file_glob={data.get('file_glob', '*.parquet')}, "
-        f"date_ranges={data.get('date_ranges')}"
+        f"{task}参数：data={config['data'].get('path')}, "
+        f"date_ranges={config['data'].get('date_ranges')}, "
+        f"checkpoint={config['output']['checkpoint_dir']}"
     )
     print(
-        f"{task}参数[features]：history_length={features['history_length']}, "
-        f"n_horizons={features['n_horizons']}, "
-        f"minutes_per_point={features['minutes_per_point']}, "
-        f"weather_columns={features.get('weather_columns') or '<按后缀自动发现>'}"
-    )
-    print(
-        f"{task}参数[model]：device={model.get('device', 'auto')}, "
-        f"target_scale={model['target_scale']}, "
-        f"prediction_clip={model['prediction_clip']}, "
-        f"architecture={model.get('architecture', '<TabM defaults>')}"
-    )
-
-
-def _print_checkpoint_parameters(
-    task: str,
-    ckpt_input: str | Path,
-    checkpoint_dir: Path,
-    model_paths: list[Path],
-) -> None:
-    print(
-        f"{task}参数[checkpoint]：input={ckpt_input}, "
-        f"resolved_dir={checkpoint_dir}, "
-        f"model_files={[str(path.resolve()) for path in model_paths]}"
+        f"{task}参数：device={config['model'].get('device', 'auto')}, "
+        f"horizons={config['model'].get('horizons', 'all')}, "
+        f"history_length={config['features']['history_length']}, "
+        f"weather={config['features'].get('weather_columns', '<自动发现>')}"
     )
 
 
 def _horizons(config: Config) -> list[int]:
     value = config["model"].get("horizons", "all")
-    count = int(config["features"]["n_horizons"])
     if value == "all":
-        return list(range(1, count + 1))
-    result = sorted({int(item) for item in value})
-    if not result or result[0] < 1 or result[-1] > count:
-        raise ValueError(f"model.horizons 必须位于 1..{count}")
-    return result
+        return list(range(1, int(config["features"]["n_horizons"]) + 1))
+    return sorted({int(horizon) for horizon in value})
 
 
-def _split(
-    samples: pd.DataFrame, config: Config
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def _split_by_date(data: pd.DataFrame, config: Config) -> pd.DataFrame:
     split = config["training"]["split"]
-    reference = samples["timestamp"] + pd.Timedelta(
+    reference = data["timestamp"] + pd.Timedelta(
         minutes=int(config["features"]["n_horizons"])
         * int(config["features"]["minutes_per_point"])
     )
-    day = reference.dt.normalize()
+    days = reference.dt.normalize()
     validation_start = split.get("validation_start")
     test_start = split.get("test_start")
-    if validation_start and test_start:
+    if validation_start:
         validation_start = pd.Timestamp(validation_start)
         test_start = pd.Timestamp(test_start)
-    elif not validation_start and not test_start:
-        days = pd.Index(day.unique()).sort_values()
+    else:
+        unique_days = pd.Index(days.unique()).sort_values()
         validation_days = int(split["validation_days"])
         test_days = int(split["test_days"])
-        if len(days) < validation_days + test_days + 1:
-            raise ValueError("可用日期不足以生成训练、验证和测试集")
-        validation_start = days[-(validation_days + test_days)]
-        test_start = days[-test_days]
-    else:
-        raise ValueError("validation_start 和 test_start 必须同时设置或同时留空")
-    train = samples[day < validation_start].copy()
-    validation = samples[(day >= validation_start) & (day < test_start)].copy()
-    test = samples[day >= test_start].copy()
-    if train.empty or validation.empty or test.empty:
-        raise ValueError("训练、验证、测试切分后均必须非空")
-    return train, validation, test
+        validation_start = unique_days[-(validation_days + test_days)]
+        test_start = unique_days[-test_days]
+    result = data.copy()
+    result["__split"] = np.where(
+        days < validation_start,
+        "train",
+        np.where(days < test_start, "validation", "test"),
+    )
+    return result
+
+
+def _training_data(
+    data: DataInput | None, config: Config, horizons: list[int]
+) -> tuple[pd.DataFrame, dict[int, list[str]], list[str]]:
+    if not config["data"].get("date_ranges"):
+        frame, columns, weather = build_feature_data(data, config, horizons)
+        return _split_by_date(frame, config), columns, weather
+
+    parts = []
+    columns: dict[int, list[str]] = {}
+    weather: list[str] = []
+    for split in ("train", "validation", "test"):
+        frame, columns, weather = build_feature_data(
+            data, config, horizons, date_range=split
+        )
+        frame["__split"] = split
+        parts.append(frame)
+    return pd.concat(parts, ignore_index=True), columns, weather
 
 
 def _metrics(target: np.ndarray, prediction: np.ndarray) -> dict[str, float]:
     error = prediction - target
     return {
-        "rmse": float(np.sqrt(np.mean(error ** 2))),
+        "rmse": float(np.sqrt(np.mean(error**2))),
         "mae": float(np.mean(np.abs(error))),
-    }
-
-
-def _select_horizon(
-    data: pd.DataFrame,
-    feature_columns: dict[int, list[str]],
-    horizon: int,
-    *,
-    require_target: bool,
-) -> pd.DataFrame:
-    suffix = f"__h{horizon:02d}"
-    target_time = f"target_timestamp{suffix}"
-    target = f"target_power{suffix}"
-    columns = ["timestamp", target_time, *feature_columns[horizon]]
-    if require_target:
-        if target not in data:
-            raise KeyError(f"训练/测试数据缺少列: {target}")
-        columns.append(target)
-    result = data[columns].rename(
-        columns={target_time: "target_timestamp", target: "target_power"}
-    )
-    if require_target:
-        result = result.dropna(subset=["target_power"])
-    return result.reset_index(drop=True)
-
-
-def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
-    """Train all configured horizons and return artifact paths and metrics."""
-    cfg = load_config(config)
-    _print_common_parameters("训练", config, cfg)
-    training = cfg["training"]
-    print(
-        f"训练参数[optimizer]：seed={training['seed']}, epochs={training['epochs']}, "
-        f"batch_size={training['batch_size']}, "
-        f"inference_batch_size={training['inference_batch_size']}, "
-        f"learning_rate={training['learning_rate']}, "
-        f"weight_decay={training['weight_decay']}, "
-        f"gradient_clipping_norm={training.get('gradient_clipping_norm')}, "
-        f"early_stopping_patience={training['early_stopping_patience']}"
-    )
-    print(
-        f"训练参数[split]：{training['split']}；"
-        f"preprocessing={training.get('preprocessing', {})}"
-    )
-    if has_date_ranges(cfg):
-        print(
-            "已启用 data.date_ranges：training.split 的日期/末尾天数配置将被忽略"
-        )
-    seed_everything(int(cfg["training"]["seed"]))
-    selected_horizons = _horizons(cfg)
-    use_date_ranges = has_date_ranges(cfg)
-    if use_date_ranges:
-        parts: list[pd.DataFrame] = []
-        weather: list[str] | None = None
-        feature_columns: dict[int, list[str]] | None = None
-        for name in ("train", "validation", "test"):
-            current, current_columns, current_weather = build_feature_data(
-                data,
-                cfg,
-                selected_horizons,
-                require_target=True,
-                date_range=name,
-            )
-            if weather is None:
-                weather = current_weather
-            elif current_weather != weather:
-                raise ValueError(
-                    f"{name} 气象列 {current_weather} "
-                    f"与训练气象列 {weather} 不一致"
-                )
-            if feature_columns is None:
-                feature_columns = current_columns
-            elif current_columns != feature_columns:
-                raise RuntimeError(f"{name} 的特征列与训练特征列不一致")
-            current["__split"] = name
-            parts.append(current)
-        if weather is None or feature_columns is None:
-            raise RuntimeError("内部错误：未生成训练特征")
-        data_frame = pd.concat(parts, ignore_index=True).sort_values(
-            "timestamp", ignore_index=True
-        )
-        counts = data_frame["__split"].value_counts()
-        print(
-            "按文件日期范围完成流式样本构造："
-            f"train_rows={counts.get('train', 0):,}, "
-            f"validation_rows={counts.get('validation', 0):,}, "
-            f"test_rows={counts.get('test', 0):,}"
-        )
-    else:
-        data_frame, feature_columns, weather = build_feature_data(
-            data,
-            cfg,
-            selected_horizons,
-            require_target=True,
-        )
-    output_dir = Path(cfg["output"]["checkpoint_dir"]).expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    resolved_config_path = output_dir / "config_resolved.yaml"
-    dump_config(cfg, resolved_config_path)
-    print(
-        f"训练任务开始：horizons={selected_horizons}, weather={weather}, "
-        f"checkpoint_dir={output_dir}"
-    )
-    print(f"解析后配置已保存：{resolved_config_path}")
-
-    metrics, test_predictions = [], []
-    for horizon in selected_horizons:
-        horizon_columns = feature_columns[horizon]
-        if use_date_ranges:
-            train_frame = _select_horizon(
-                data_frame[data_frame["__split"].eq("train")],
-                feature_columns,
-                horizon,
-                require_target=True,
-            )
-            validation_frame = _select_horizon(
-                data_frame[data_frame["__split"].eq("validation")],
-                feature_columns,
-                horizon,
-                require_target=True,
-            )
-            test_frame = _select_horizon(
-                data_frame[data_frame["__split"].eq("test")],
-                feature_columns,
-                horizon,
-                require_target=True,
-            )
-            total_samples = len(train_frame) + len(validation_frame) + len(test_frame)
-        else:
-            samples = _select_horizon(
-                data_frame, feature_columns, horizon, require_target=True
-            )
-            train_frame, validation_frame, test_frame = _split(samples, cfg)
-            total_samples = len(samples)
-        print(
-            f"horizon={horizon:02d} 样本构造完成：total={total_samples:,}, "
-            f"train={len(train_frame):,}, validation={len(validation_frame):,}, "
-            f"test={len(test_frame):,}, features={len(horizon_columns)}"
-        )
-        fit_result = train_one(
-            train_frame, validation_frame, horizon_columns, horizon, cfg, output_dir
-        )
-        prediction = _predict_horizon(output_dir, test_frame, horizon, cfg)
-        score = _metrics(test_frame["target_power"].to_numpy(), prediction)
-        metrics.append(
-            {
-                "horizon": horizon,
-                "minutes_ahead": horizon
-                * int(cfg["features"]["minutes_per_point"]),
-                "feature_count": len(horizon_columns),
-                **fit_result,
-                "test_rmse": score["rmse"],
-                "test_mae": score["mae"],
-            }
-        )
-        result = test_frame[["timestamp", "target_timestamp", "target_power"]].copy()
-        result["horizon"] = horizon
-        result[INTERNAL_PREDICTION_COLUMN] = prediction
-        test_predictions.append(result)
-        print(
-            f"horizon={horizon:02d} 完成：test_rmse={score['rmse']:.6f}, "
-            f"test_mae={score['mae']:.6f}"
-        )
-
-    metrics_df = pd.DataFrame(metrics)
-    predictions_df = pd.concat(test_predictions, ignore_index=True)
-    metrics_path = output_dir / "metrics_by_horizon.csv"
-    predictions_path = output_dir / "test_predictions.parquet"
-    metadata_path = output_dir / "metadata.json"
-    metrics_df.to_csv(metrics_path, index=False)
-    predictions_df.to_parquet(predictions_path, index=False)
-    delivery_paths = save_delivery_frames(
-        delivery_frames(predictions_df, cfg, skip_incomplete=True),
-        output_dir,
-        cfg,
-    )
-    metadata = {
-        "artifact_version": 1,
-        "model_type": "TabM",
-        "horizons": selected_horizons,
-        "weather_columns": weather,
-        "mean_test_rmse": float(metrics_df["test_rmse"].mean()),
-        "delivery_file_count": len(delivery_paths),
-    }
-    with metadata_path.open("w", encoding="utf-8") as file:
-        json.dump(metadata, file, ensure_ascii=False, indent=2)
-    print(f"训练指标已保存：{metrics_path.resolve()}")
-    print(f"测试预测已保存：{predictions_path.resolve()}")
-    print(f"checkpoint 元数据已保存：{metadata_path.resolve()}")
-    print(
-        f"训练任务完成：mean_test_rmse={metadata['mean_test_rmse']:.6f}, "
-        f"checkpoint_dir={output_dir}"
-    )
-    return {
-        "checkpoint_dir": output_dir,
-        "metrics": metrics_df,
-        "predictions": predictions_df,
     }
 
 
@@ -324,50 +105,40 @@ def _checkpoint(
     checkpoint: str | Path,
 ) -> tuple[Path, list[Path], dict[str, Any]]:
     path = Path(checkpoint).expanduser().resolve()
-    if path.is_file():
-        if path.suffix != ".pt" or path.parent.name != "models":
-            raise ValueError("单文件 checkpoint 必须是 models/model_hXX.pt")
-        checkpoint_dir, selected_model = path.parent.parent, path
-    else:
-        checkpoint_dir, selected_model = path, None
-
-    metadata_path = checkpoint_dir / "metadata.json"
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"checkpoint 缺少 metadata.json: {checkpoint_dir}")
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    if selected_model is not None:
-        models = [selected_model]
-    else:
-        models = [
+    checkpoint_dir = path.parent.parent if path.is_file() else path
+    metadata = json.loads(
+        (checkpoint_dir / "metadata.json").read_text(encoding="utf-8")
+    )
+    model_paths = (
+        [path]
+        if path.is_file()
+        else [
             checkpoint_dir / "models" / f"model_h{int(horizon):02d}.pt"
             for horizon in metadata["horizons"]
         ]
-    missing = [str(model) for model in models if not model.exists()]
-    if missing:
-        raise FileNotFoundError(f"checkpoint 元数据引用的模型不存在: {missing}")
-    return checkpoint_dir, models, metadata
+    )
+    print(
+        f"checkpoint={checkpoint_dir}, "
+        f"models={[str(model) for model in model_paths]}"
+    )
+    return checkpoint_dir, model_paths, metadata
 
 
 def _predict_horizon(
-    checkpoint_dir: Path, samples: pd.DataFrame, horizon: int, config: Config
+    checkpoint_dir: Path,
+    model_path: Path,
+    data: pd.DataFrame,
+    config: Config,
 ) -> np.ndarray:
     device = resolve_device(config["model"].get("device", "auto"))
-    model_path = checkpoint_dir / "models" / f"model_h{horizon:02d}.pt"
     model, preprocessor, payload = load_one(model_path, checkpoint_dir, device)
-    names = list(payload["feature_names"])
-    selected = [
-        name if name in samples else f"{name}__h{horizon:02d}"
-        for name in names
-    ]
-    missing = [name for name, actual in zip(names, selected) if actual not in samples]
-    if missing:
-        raise RuntimeError(f"推理特征与 checkpoint 不一致，缺少: {missing}")
-    x = transform(preprocessor, samples[selected].to_numpy(dtype=np.float32))
+    values = data[payload["feature_names"]].to_numpy(dtype=np.float32)
+    values = transform(preprocessor, values)
     lower, upper = map(float, config["model"]["prediction_clip"])
     return np.clip(
         infer_array(
             model,
-            x,
+            values,
             device=device,
             batch_size=int(config["training"]["inference_batch_size"]),
             target_scale=float(payload["target_scale"]),
@@ -377,19 +148,10 @@ def _predict_horizon(
     )
 
 
-def _validate_weather(
-    metadata: dict[str, Any], weather: list[str]
-) -> None:
-    expected_weather = metadata["weather_columns"]
-    if weather != expected_weather:
-        raise ValueError(f"推理气象列 {weather} 与训练时 {expected_weather} 不一致")
-
-
-def _predict_features(
+def _predict_all(
     checkpoint_dir: Path,
     model_paths: list[Path],
     data: pd.DataFrame,
-    feature_columns: dict[int, list[str]],
     config: Config,
     *,
     include_target: bool,
@@ -397,19 +159,17 @@ def _predict_features(
     outputs = []
     for model_path in model_paths:
         horizon = int(model_path.stem.removeprefix("model_h"))
-        samples = _select_horizon(
-            data,
-            feature_columns,
-            horizon,
-            require_target=include_target,
+        suffix = f"__h{horizon:02d}"
+        target = f"target_power{suffix}"
+        current = data.dropna(subset=[target]) if include_target else data
+        result = current[["timestamp", f"target_timestamp{suffix}"]].rename(
+            columns={f"target_timestamp{suffix}": "target_timestamp"}
         )
-        result_columns = ["timestamp", "target_timestamp"]
         if include_target:
-            result_columns.append("target_power")
-        result = samples[result_columns].copy()
+            result["target_power"] = current[target].to_numpy()
         result["horizon"] = horizon
         result[INTERNAL_PREDICTION_COLUMN] = _predict_horizon(
-            checkpoint_dir, samples, horizon, config
+            checkpoint_dir, model_path, current, config
         )
         outputs.append(result)
         print(f"horizon={horizon:02d} 推理完成：rows={len(result):,}")
@@ -418,128 +178,134 @@ def _predict_features(
     )
 
 
+def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
+    cfg = load_config(config)
+    _print_config("训练", config, cfg)
+    seed_everything(int(cfg["training"]["seed"]))
+    horizons = _horizons(cfg)
+    frame, columns_by_horizon, weather = _training_data(data, cfg, horizons)
+
+    output_dir = Path(cfg["output"]["checkpoint_dir"]).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    dump_config(cfg, output_dir / "config_resolved.yaml")
+
+    metrics, predictions = [], []
+    for horizon in horizons:
+        suffix = f"__h{horizon:02d}"
+        target = f"target_power{suffix}"
+        current = frame.dropna(subset=[target])
+        train_frame = current[current["__split"].eq("train")]
+        validation_frame = current[current["__split"].eq("validation")]
+        test_frame = current[current["__split"].eq("test")]
+        columns = columns_by_horizon[horizon]
+        print(
+            f"horizon={horizon:02d}：features={len(columns)}, "
+            f"train={len(train_frame):,}, validation={len(validation_frame):,}, "
+            f"test={len(test_frame):,}"
+        )
+        fit = train_one(
+            train_frame,
+            validation_frame,
+            columns,
+            target,
+            horizon,
+            cfg,
+            output_dir,
+        )
+        model_path = output_dir / "models" / f"model_h{horizon:02d}.pt"
+        prediction = _predict_horizon(output_dir, model_path, test_frame, cfg)
+        score = _metrics(test_frame[target].to_numpy(), prediction)
+        metrics.append(
+            {
+                "horizon": horizon,
+                "minutes_ahead": horizon
+                * int(cfg["features"]["minutes_per_point"]),
+                "feature_count": len(columns),
+                **fit,
+                "test_rmse": score["rmse"],
+                "test_mae": score["mae"],
+            }
+        )
+        result = test_frame[["timestamp", f"target_timestamp{suffix}", target]].rename(
+            columns={
+                f"target_timestamp{suffix}": "target_timestamp",
+                target: "target_power",
+            }
+        )
+        result["horizon"] = horizon
+        result[INTERNAL_PREDICTION_COLUMN] = prediction
+        predictions.append(result)
+
+    metrics_df = pd.DataFrame(metrics)
+    predictions_df = pd.concat(predictions, ignore_index=True)
+    metrics_df.to_csv(output_dir / "metrics_by_horizon.csv", index=False)
+    forecasts = delivery_frames(predictions_df, cfg, skip_incomplete=True)
+    save_delivery_frames(forecasts, output_dir, cfg)
+    metadata = {
+        "horizons": horizons,
+        "weather_columns": weather,
+        "mean_test_rmse": float(metrics_df["test_rmse"].mean()),
+    }
+    (output_dir / "metadata.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"训练完成：checkpoint={output_dir}")
+    return {
+        "checkpoint_dir": output_dir,
+        "metrics": metrics_df,
+        "predictions": predictions_df,
+    }
+
+
 def predict(
     ckpt_path: str | Path, data: DataInput, config: ConfigInput
 ) -> pd.DataFrame:
-    """Run one-origin inference and return the formal delivery DataFrame."""
     cfg = load_config(config)
-    _print_common_parameters("推理", config, cfg)
-    checkpoint_dir, model_paths, metadata = _checkpoint(ckpt_path)
-    _print_checkpoint_parameters("推理", ckpt_path, checkpoint_dir, model_paths)
-    actual_horizons = {
-        int(model_path.stem.removeprefix("model_h")) for model_path in model_paths
-    }
-    required_horizons = expected_horizons(cfg)
-    if actual_horizons != required_horizons:
-        raise ValueError(
-            "predict() 必须加载完整 horizon checkpoint："
-            f"expected={sorted(required_horizons)}, actual={sorted(actual_horizons)}"
-        )
-    print(
-        f"推理参数[runtime]：inference_batch_size="
-        f"{cfg['training']['inference_batch_size']}, "
-        f"prediction_column={cfg['output']['prediction_column']}, "
-        f"metadata_horizons={metadata['horizons']}, "
-        f"metadata_weather_columns={metadata['weather_columns']}"
-    )
-    print(
-        f"推理任务开始：checkpoint_dir={checkpoint_dir}, "
-        f"models={len(model_paths)}"
-    )
-    horizons = sorted(actual_horizons)
-    data_frame, feature_columns, weather = build_feature_data(
-        data,
-        cfg,
-        horizons,
-        require_target=False,
-    )
-    input_origins = pd.Index(data_frame["timestamp"].unique())
-    if len(input_origins) != 1:
-        raise ValueError(
-            "predict() 只允许一个起报时刻；"
-            f"当前发现 {len(input_origins)} 个：{input_origins.astype(str).tolist()}"
-        )
-    _validate_weather(metadata, weather)
-    origin = input_origins[0]
-    result = _predict_features(
-        checkpoint_dir,
-        model_paths,
-        data_frame,
-        feature_columns,
-        cfg,
-        include_target=False,
-    )
-    formatted = next(
-        iter(delivery_frames(result, cfg, skip_incomplete=False).values())
-    )
-    print(
-        f"推理任务完成：origin={origin}, rows={len(formatted):,}, "
-        f"columns={formatted.columns.tolist()}；不保存本地文件"
-    )
-    return formatted
-
-
-def _run_test(
-    ckpt_path: str | Path, data: DataInput | None, config: ConfigInput
-) -> tuple[Config, Path, pd.DataFrame, pd.DataFrame]:
-    cfg = load_config(config)
-    _print_common_parameters("测试", config, cfg)
-    checkpoint_dir, model_paths, metadata = _checkpoint(ckpt_path)
-    _print_checkpoint_parameters("测试", ckpt_path, checkpoint_dir, model_paths)
-    print(
-        f"测试参数[runtime]：inference_batch_size="
-        f"{cfg['training']['inference_batch_size']}, "
-        f"prediction_column={cfg['output']['prediction_column']}, "
-        f"metadata_horizons={metadata['horizons']}, "
-        f"metadata_weather_columns={metadata['weather_columns']}"
-    )
-    print(
-        f"测试任务开始：checkpoint_dir={checkpoint_dir}, "
-        f"models={len(model_paths)}"
-    )
+    _print_config("推理", config, cfg)
+    checkpoint_dir, model_paths, _ = _checkpoint(ckpt_path)
     horizons = sorted(
-        int(model_path.stem.removeprefix("model_h")) for model_path in model_paths
+        int(path.stem.removeprefix("model_h")) for path in model_paths
     )
-    data_frame, feature_columns, weather = build_feature_data(
-        data,
-        cfg,
-        horizons,
-        require_target=True,
-        date_range="test",
+    frame, _, _ = build_feature_data(data, cfg, horizons)
+    origins = frame["timestamp"].unique()
+    if len(origins) != 1:
+        raise ValueError(f"predict() 只允许一个起报时刻，当前为 {len(origins)} 个")
+    predictions = _predict_all(
+        checkpoint_dir, model_paths, frame, cfg, include_target=False
     )
-    _validate_weather(metadata, weather)
-    predictions = _predict_features(
-        checkpoint_dir,
-        model_paths,
-        data_frame,
-        feature_columns,
-        cfg,
-        include_target=True,
+    result = next(
+        iter(delivery_frames(predictions, cfg, skip_incomplete=False).values())
     )
-    metrics = []
-    prediction_col = INTERNAL_PREDICTION_COLUMN
-    for horizon, current in predictions.groupby("horizon", sort=True):
-        score = _metrics(
-            current["target_power"].to_numpy(),
-            current[prediction_col].to_numpy(),
-        )
-        metrics.append({"horizon": int(horizon), "sample_count": len(current), **score})
-        print(
-            f"horizon={int(horizon):02d} 测试指标：samples={len(current):,}, "
-            f"rmse={score['rmse']:.6f}, mae={score['mae']:.6f}"
-        )
-    print(
-        f"测试计算完成：prediction_rows={len(predictions):,}；"
-        "继续生成正式交付文件"
-    )
-    return cfg, checkpoint_dir, pd.DataFrame(metrics), predictions
+    print(f"推理完成：origin={origins[0]}, rows={len(result):,}，不保存文件")
+    return result
 
 
 def test(
     ckpt_path: str | Path, data: DataInput | None, config: ConfigInput
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Evaluate, save original-format delivery files, and return delivery frames."""
-    cfg, checkpoint_dir, metrics, predictions = _run_test(ckpt_path, data, config)
+    cfg = load_config(config)
+    _print_config("测试", config, cfg)
+    checkpoint_dir, model_paths, _ = _checkpoint(ckpt_path)
+    horizons = sorted(
+        int(path.stem.removeprefix("model_h")) for path in model_paths
+    )
+    frame, _, _ = build_feature_data(
+        data, cfg, horizons, date_range="test"
+    )
+    predictions = _predict_all(
+        checkpoint_dir, model_paths, frame, cfg, include_target=True
+    )
+    metrics = []
+    for horizon, current in predictions.groupby("horizon", sort=True):
+        score = _metrics(
+            current["target_power"].to_numpy(),
+            current[INTERNAL_PREDICTION_COLUMN].to_numpy(),
+        )
+        metrics.append({"horizon": int(horizon), "sample_count": len(current), **score})
+        print(
+            f"horizon={int(horizon):02d}：rmse={score['rmse']:.6f}, "
+            f"mae={score['mae']:.6f}"
+        )
     frames = delivery_frames(predictions, cfg, skip_incomplete=True)
     save_delivery_frames(frames, checkpoint_dir, cfg)
-    return metrics, combine_delivery_frames(frames)
+    return pd.DataFrame(metrics), combine_delivery_frames(frames)

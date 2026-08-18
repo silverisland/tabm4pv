@@ -24,7 +24,6 @@ def test_build_inference_samples_without_future_target():
         "features": {
             "history_length": 4,
             "minutes_per_point": 15,
-            "wind_direction_keywords": ["wind_direction"],
         },
     }
     timestamp = pd.Timestamp("2026-08-17 12:00:00")
@@ -37,9 +36,7 @@ def test_build_inference_samples_without_future_target():
             "ghi_predict": [np.arange(2), np.array([10.0, 20.0])],
         }
     )
-    features, columns, _ = build_feature_data(
-        data, config, [2], require_target=False
-    )
+    features, columns, _ = build_feature_data(data, config, [2])
     assert len(features) == 1
     assert "target_power__h02" not in features
     assert features.loc[0, "target_timestamp__h02"] == timestamp + pd.Timedelta(
@@ -54,7 +51,7 @@ def test_build_inference_samples_without_future_target():
     ]
 
 
-def test_v2_feature_values_match_original_recipe():
+def test_feature_values_and_column_order():
     config = {
         "data": {
             "province_station": "province_guangxi_solar",
@@ -72,7 +69,6 @@ def test_v2_feature_values_match_original_recipe():
         "features": {
             "history_length": 4,
             "minutes_per_point": 15,
-            "wind_direction_keywords": ["wind_direction", "winddirection", "wd_"],
         },
     }
     timestamp = pd.Timestamp("2026-08-17 06:00:00")
@@ -103,7 +99,7 @@ def test_v2_feature_values_match_original_recipe():
         }
     )
 
-    features, columns, _ = build_feature_data(data, config, [2], require_target=True)
+    features, columns, _ = build_feature_data(data, config, [2])
     names = columns[2]
 
     assert features.filter(like="power_lag_").columns.tolist() == names[:4]
@@ -113,16 +109,16 @@ def test_v2_feature_values_match_original_recipe():
         "power_lag_3",
         "power_lag_2",
         "power_lag_1",
-        "weighted__ghi_predict__capacity_coverage__h02",
         "weighted__ghi_predict__mean__h02",
+        "time__hour__h02",
         "time__hour_sin__h02",
         "time__hour_cos__h02",
     ]
     np.testing.assert_allclose(features.loc[0, names[:4]], [1.0, 2.0, 3.0, 4.0])
-    assert features.loc[0, "weighted__ghi_predict__capacity_coverage__h02"] == 0.25
     assert features.loc[0, "weighted__ghi_predict__mean__h02"] == 20.0
     assert features.loc[0, "target_power__h02"] == 60.0
     expected_hour = 6.5
+    assert features.loc[0, "time__hour__h02"] == expected_hour
     np.testing.assert_allclose(
         features.loc[0, ["time__hour_sin__h02", "time__hour_cos__h02"]],
         [np.sin(2 * np.pi * expected_hour / 24), np.cos(2 * np.pi * expected_hour / 24)],

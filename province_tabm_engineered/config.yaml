@@ -3,7 +3,6 @@ data:
   path: /home/nuoya_model_train/power_by_date_final_0807/ultra-short-general
   file_glob: "plantid=*.parquet"
   file_date_regex: "plantid=(\\d{4}-\\d{2}-\\d{2})\\.parquet$"
-  strict_file_dates: true
   # 启用后，train()/test() 共用 data.path，并在读取前按文件名日期筛选。
   # start/end 均为闭区间；设为 null 时继续使用 training.split 自动切分。
   date_ranges: null
@@ -35,11 +34,6 @@ features:
     - TEMP_SOLARGIS_predict
     - ssrd_pos_1_predict
     - t2m_pos_1_predict
-  wind_direction_keywords:
-    - wind_direction
-    - winddirection
-    - wd_
-
 model:
   # all 表示 1..n_horizons；也可以写成 [1, 4, 8, 16]。
   horizons: all

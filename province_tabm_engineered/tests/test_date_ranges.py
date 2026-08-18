@@ -4,7 +4,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from province_tabm_engineered.data import iter_data_frames
 from province_tabm_engineered.features import build_feature_data
@@ -16,7 +15,6 @@ def _config(data_dir: Path) -> dict:
             "path": str(data_dir),
             "file_glob": "plantid=*.parquet",
             "file_date_regex": r"plantid=(\d{4}-\d{2}-\d{2})\.parquet$",
-            "strict_file_dates": True,
             "date_ranges": {
                 "train": {"start": "2026-08-01", "end": "2026-08-02"},
                 "validation": {"start": "2026-08-03", "end": "2026-08-03"},
@@ -60,7 +58,6 @@ def _loaded_frame(
             iter_data_frames(
                 data,
                 config,
-                require_target=True,
                 date_range=date_range,
             )
         ),
@@ -108,7 +105,6 @@ def _streaming_config(data_dir: Path) -> dict:
         "n_horizons": 2,
         "minutes_per_point": 15,
         "weather_columns": ["ghi_predict"],
-        "wind_direction_keywords": ["wind_direction"],
     }
     return config
 
@@ -152,43 +148,14 @@ def test_streamed_samples_match_full_frame_recipe(tmp_path: Path):
         None,
         config,
         [1, 2],
-        require_target=True,
         date_range="train",
     )
     full_frame = _loaded_frame(None, config, date_range="train")
 
     expected, expected_columns, expected_weather = build_feature_data(
-        full_frame, config, [1, 2], require_target=True
+        full_frame, config, [1, 2]
     )
 
     assert weather == expected_weather == ["ghi_predict"]
     assert streamed_columns == expected_columns
     pd.testing.assert_frame_equal(streamed, expected)
-
-
-def test_filename_date_must_match_content_date(tmp_path: Path):
-    config = _streaming_config(tmp_path)
-    _feature_frame("2026-08-01").to_parquet(
-        tmp_path / "plantid=2026-08-02.parquet"
-    )
-
-    with pytest.raises(ValueError, match="文件名日期为 2026-08-02"):
-        build_feature_data(None, config, [1, 2], require_target=True)
-
-
-def test_origin_cannot_span_multiple_files(tmp_path: Path):
-    config = _streaming_config(tmp_path)
-    first_dir = tmp_path / "first"
-    second_dir = tmp_path / "second"
-    first_dir.mkdir()
-    second_dir.mkdir()
-    duplicated = _feature_frame("2026-08-01")
-    first_path = first_dir / "plantid=2026-08-01.parquet"
-    second_path = second_dir / "plantid=2026-08-01.parquet"
-    duplicated.to_parquet(first_path)
-    duplicated.to_parquet(second_path)
-
-    with pytest.raises(ValueError, match="同一起报时刻出现在多个文件中"):
-        build_feature_data(
-            [first_path, second_path], config, [1, 2], require_target=True
-        )
