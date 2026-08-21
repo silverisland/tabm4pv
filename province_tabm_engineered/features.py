@@ -92,7 +92,7 @@ def _file_features(
         ).add_suffix(suffix)
         target_time = origins + pd.Timedelta(minutes=horizon * minutes)
         hour = target_time.hour.to_numpy() + target_time.minute.to_numpy() / 60.0
-        current[f"time__hour{suffix}"] = hour.astype(np.float32)
+        current[f"time__hour{suffix}"] = target_time.hour.to_numpy()
         current[f"time__hour_sin{suffix}"] = np.sin(2 * np.pi * hour / 24).astype(
             np.float32
         )

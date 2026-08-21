@@ -31,8 +31,8 @@ def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed + 1)
     torch.manual_seed(seed + 2)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed + 2)
+    # if torch.cuda.is_available():
+    #     torch.cuda.manual_seed_all(seed + 2)
 
 
 def make_model(
@@ -57,16 +57,13 @@ def fit_preprocessor(
     noise = np.random.default_rng(seed).normal(
         0.0, float(preprocessing.get("noise_std", 1e-5)), imputed.shape
     ).astype(np.float32)
-    n_quantiles = min(
-        max(
-            min(
-                len(imputed) // int(preprocessing.get("samples_per_quantile", 30)),
-                int(preprocessing.get("max_quantiles", 1000)),
-            ),
-            int(preprocessing.get("min_quantiles", 10)),
-        ),
-        len(imputed),
-    )
+    n_quantiles = max(
+                      min(
+                          len(imputed) // int(preprocessing.get("samples_per_quantile", 30)),
+                          int(preprocessing.get("max_quantiles", 1000)),
+                      ),
+                      int(preprocessing.get("min_quantiles", 10)),
+                  )
     transformer = sklearn.preprocessing.QuantileTransformer(
         n_quantiles=n_quantiles,
         output_distribution="normal",
@@ -133,7 +130,7 @@ def train_one(
         model_cfg["target_scale"]
     )
 
-    torch.manual_seed(seed + 2 + horizon)
+    # torch.manual_seed(seed + 2 + horizon)
     architecture = dict(model_cfg.get("architecture", {}))
     model = make_model(len(feature_names), device, architecture)
     optimizer = torch.optim.AdamW(
