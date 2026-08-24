@@ -61,6 +61,24 @@ class Model:
 
     def inference(self, df: pd.DataFrame) -> pd.DataFrame:
         """Predict all origins and return one length-16 array per origin."""
+        capacity_col = self.config["data"]["columns"]["capacity"]
+        if capacity_col not in df.columns:
+            raise ValueError(f"输入 DataFrame 缺少容量列：{capacity_col}")
+
+        df = df.copy()
+
+        def capacity_float(value: Any) -> float:
+            if isinstance(value, (np.ndarray, list, tuple)):
+                values = np.asarray(value).reshape(-1)
+                if len(values) == 0:
+                    raise ValueError(f"{capacity_col} 不能是空数组")
+                value = values[0]
+            try:
+                return float(value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"{capacity_col} 必须是数值或非空数组") from error
+
+        df[capacity_col] = df[capacity_col].map(capacity_float)
         frame, _, _ = build_feature_data(df, self.config, self.horizons)
         batch_size = int(self.config["training"]["inference_batch_size"])
         lower, upper = map(float, self.config["model"]["prediction_clip"])
