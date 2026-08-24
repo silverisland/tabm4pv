@@ -1,0 +1,9 @@
+joblib>=1.5,<2
+numpy>=2,<3
+pandas>=3,<4
+pyarrow>=24,<25
+PyYAML>=6,<7
+rtdl_num_embeddings>=0.0.12
+scikit-learn>=1.7,<2
+tabm>=0.0.3
+torch>=2.8,<3
