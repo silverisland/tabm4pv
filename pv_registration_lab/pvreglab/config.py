@@ -54,6 +54,8 @@ def validate_config(config: dict[str, Any]) -> None:
 
     data_contract = config["data_contract"]
     required_data_keys = {
+        "parquet_root",
+        "parquet_glob",
         "station_info_path",
         "station_info_station_column",
         "station_info_capacity_column",
@@ -72,6 +74,10 @@ def validate_config(config: dict[str, Any]) -> None:
     missing_data = sorted(required_data_keys - set(data_contract))
     if missing_data:
         raise ConfigError(f"data_contract is missing: {missing_data}")
+    if not str(data_contract["parquet_root"]).strip():
+        raise ConfigError("data_contract.parquet_root must be non-empty")
+    if not str(data_contract["parquet_glob"]).strip():
+        raise ConfigError("data_contract.parquet_glob must be non-empty")
     if data_contract["target_history_role"] not in {
         "registration_only",
         "train_and_registration",

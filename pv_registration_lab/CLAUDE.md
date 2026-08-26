@@ -12,8 +12,10 @@ experiment.
 ## Bootstrap
 
 If `config.json` does not exist, create it from `config.example.json`. Inspect
-the private project and implement only `adapters/project_adapter.py` according
-to `references/adapter-contract.md`. Do not rewrite the existing TabM model.
+the bundled `pipelines/tabm4pv.py`, `pipelines/registered_tabm4pv.py`, and
+`pipelines/README.md`, then implement only `adapters/project_adapter.py`
+according to `references/adapter-contract.md`. Do not import Python modules
+from outside this lab and do not rewrite the existing TabM model.
 
 Run:
 

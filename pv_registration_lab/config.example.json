@@ -1,5 +1,5 @@
 {
-  "project_root": "..",
+  "project_root": ".",
   "state_dir": ".lab_state",
   "adapter_command": [
     "{python}",
@@ -13,6 +13,8 @@
   "target_station": "雅砻江",
   "baseline_implementation_id": "private-tabm-baseline-v1",
   "data_contract": {
+    "parquet_root": "/path/to/private/station_parquets",
+    "parquet_glob": "station=*.parquet",
     "station_info_path": "/home/ma-user/work/tabm_multi_stations/station_info.csv",
     "station_info_station_column": "plantid",
     "station_info_capacity_column": "GCCAPACITY",
@@ -58,6 +60,8 @@
     "controller.py",
     "pvreglab",
     "protected",
+    "pipelines",
+    "requirements.txt",
     "adapters/project_adapter.py",
     "adapters/data_utils.py"
   ]

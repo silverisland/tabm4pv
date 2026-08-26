@@ -1,0 +1,9 @@
+joblib
+numpy
+pandas
+pyarrow
+rtdl-num-embeddings
+scikit-learn
+scipy
+tabm
+torch

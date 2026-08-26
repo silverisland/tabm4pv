@@ -1,7 +1,15 @@
 # Private TabM Adapter Contract
 
 Only `adapters/project_adapter.py` needs project-specific integration. The
-controller writes a request JSON and expects one aggregate result JSON.
+controller writes a request JSON and expects one aggregate result JSON. Use
+`pipelines/tabm4pv.py` for exact baseline semantics and the two other bundled
+pipeline files for the prior registration implementation. Do not import Python
+code from the parent repository.
+
+Discover station parquet files from `data_contract.parquet_root` and
+`data_contract.parquet_glob`. The only expected external code dependencies are
+the packages in `requirements.txt`; parquet files and `station_info.csv` are
+external private data, not source code.
 
 ## Request
 

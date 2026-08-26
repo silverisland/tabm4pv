@@ -12,6 +12,8 @@ data and private code inside the experiment environment.
 
 1. Read [references/adapter-contract.md](references/adapter-contract.md) when
    connecting this package to the private TabM pipeline.
+   The original model and combined registration references are bundled in
+   `pipelines/`; Python code outside this lab is not required.
 2. Copy `config.example.json` to `config.json`, configure local stations and the
    adapter command, then run:
 

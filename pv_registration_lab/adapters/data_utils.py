@@ -8,6 +8,18 @@ from typing import Any
 import pandas as pd
 
 
+def discover_station_files(data_contract: dict[str, Any]) -> list[Path]:
+    """Find private parquet inputs from configuration, never parent code."""
+    root = Path(data_contract["parquet_root"])
+    pattern = str(data_contract["parquet_glob"])
+    if not root.is_dir():
+        raise FileNotFoundError(f"Parquet root does not exist: {root}")
+    files = sorted(path for path in root.glob(pattern) if path.is_file())
+    if not files:
+        raise FileNotFoundError(f"No parquet files match {pattern} under {root}")
+    return files
+
+
 def canonical_station(value: Any, aliases: dict[str, str]) -> str:
     raw = str(value).strip()
     return str(aliases.get(raw, raw))

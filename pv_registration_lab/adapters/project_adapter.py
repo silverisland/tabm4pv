@@ -1,7 +1,9 @@
 """Local integration point for the confidential experiment environment.
 
-Implement ``run_local_experiment`` inside the private environment. Keep raw
-data inside the existing project and return aggregate metrics only.
+Implement ``run_local_experiment`` inside the private environment. The original
+TabM and combined registration scripts are bundled under ``pipelines/`` so the
+adapter must not import Python code from outside this lab. Keep raw data in its
+configured external location and return aggregate metrics only.
 """
 
 from __future__ import annotations
@@ -15,6 +17,12 @@ from typing import Any
 def run_local_experiment(request: dict[str, Any]) -> dict[str, Any]:
     """Run the existing TabM pipeline for one controlled request.
 
+    Use pipelines/tabm4pv.py as the exact baseline reference and
+    pipelines/registered_tabm4pv.py only as a feature/model integration
+    reference. Translate the fixed constants in those scripts into the split
+    and mode supplied by this request; do not execute a monolithic reference
+    script unchanged.
+
     Required request fields include mode, seed, training_stations,
     held_out_station, calibration_days and final_test. The implementation must
     use training_stations for fitting TabM, use only calibration_days of a
@@ -27,8 +35,8 @@ def run_local_experiment(request: dict[str, Any]) -> dict[str, Any]:
     match exactly.
     """
     raise NotImplementedError(
-        "Connect this adapter to the private TabM entrypoint. Read "
-        "references/adapter-contract.md before implementing it."
+        "Connect the bundled pipelines to this controlled adapter. Read "
+        "pipelines/README.md and references/adapter-contract.md first."
     )
 
 

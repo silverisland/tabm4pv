@@ -6,6 +6,7 @@ import pandas as pd
 
 from adapters.data_utils import (
     add_station_identity,
+    discover_station_files,
     load_capacity_map,
     select_target_periods,
 )
@@ -14,6 +15,8 @@ from adapters.data_utils import (
 class DataContractTests(unittest.TestCase):
     def contract(self, station_info_path):
         return {
+            "parquet_root": "/unused",
+            "parquet_glob": "station=*.parquet",
             "station_info_path": str(station_info_path),
             "station_info_station_column": "plantid",
             "station_info_capacity_column": "GCCAPACITY",
@@ -60,6 +63,16 @@ class DataContractTests(unittest.TestCase):
         self.assertEqual(
             evaluation.iloc[0]["station_raw"], "雅砻江解放站"
         )
+
+    def test_station_files_are_discovered_inside_configured_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "station=a.parquet").touch()
+            (root / "ignore.csv").touch()
+            contract = self.contract("unused.csv")
+            contract["parquet_root"] = str(root)
+            files = discover_station_files(contract)
+        self.assertEqual([path.name for path in files], ["station=a.parquet"])
 
 
 if __name__ == "__main__":
