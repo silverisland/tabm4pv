@@ -2,10 +2,88 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
+
+
+@dataclass(frozen=True)
+class WeatherSpec:
+    future_columns: tuple[str, ...]
+    future_index: int
+
+    @property
+    def minimum_array_length(self) -> int:
+        return self.future_index + 1
+
+
+def weather_spec_from_request(request: dict[str, Any]) -> WeatherSpec:
+    """Read the single authoritative weather definition from a request."""
+    try:
+        raw = request["metadata"]["weather"]
+        columns = tuple(str(value).strip() for value in raw["future_columns"])
+        future_index = raw["future_index"]
+    except (KeyError, TypeError) as error:
+        raise ValueError("Request is missing metadata.weather") from error
+    if not columns or any(not column for column in columns):
+        raise ValueError("Weather columns must be non-empty")
+    if len(columns) != len(set(columns)):
+        raise ValueError("Weather columns must be unique")
+    if (
+        not isinstance(future_index, int)
+        or isinstance(future_index, bool)
+        or future_index < 0
+    ):
+        raise ValueError("Weather future_index must be a nonnegative int")
+    return WeatherSpec(columns, future_index)
+
+
+def extract_future_weather(
+    frame: pd.DataFrame, spec: WeatherSpec
+) -> pd.DataFrame:
+    """Extract physical target-time weather using one shared array index."""
+    missing = [column for column in spec.future_columns if column not in frame]
+    if missing:
+        raise KeyError(f"Missing configured weather columns: {missing}")
+    extracted: dict[str, np.ndarray] = {}
+    for column in spec.future_columns:
+        extracted[f"{column}_target"] = _extract_array_index(
+            frame[column], column, spec.future_index
+        )
+    return pd.DataFrame(extracted, index=frame.index)
+
+
+def extract_future_target(
+    frame: pd.DataFrame,
+    target_column: str,
+    spec: WeatherSpec,
+) -> pd.Series:
+    """Extract target power at exactly the configured weather index."""
+    if target_column not in frame:
+        raise KeyError(f"Missing target column: {target_column}")
+    values = _extract_array_index(
+        frame[target_column], target_column, spec.future_index
+    )
+    return pd.Series(values, index=frame.index, name=f"{target_column}_target")
+
+
+def _extract_array_index(
+    series: pd.Series, column: str, future_index: int
+) -> np.ndarray:
+    values = []
+    minimum_length = future_index + 1
+    for row_number, raw in enumerate(series):
+        array = np.asarray(raw).reshape(-1)
+        if len(array) < minimum_length:
+            raise ValueError(
+                f"{column} row {row_number} has length {len(array)}; "
+                f"need at least {minimum_length}"
+            )
+        values.append(float(array[future_index]))
+    return np.asarray(values, dtype=np.float32)
 
 
 def discover_station_files(data_contract: dict[str, Any]) -> list[Path]:

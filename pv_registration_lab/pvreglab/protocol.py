@@ -12,6 +12,14 @@ def implementation_for_mode(config: dict, mode: str) -> str:
     return str(config["_implementation_hash"])
 
 
+def request_metadata(config: dict) -> dict:
+    """Configuration passed identically to every adapter mode."""
+    return {
+        "data_contract": config["data_contract"],
+        "weather": config["weather"],
+    }
+
+
 def identity_audit_requests(config: dict) -> list[ExperimentRequest]:
     station = config["source_stations"][0]
     seed = int(config["quick_seeds"][0])
@@ -22,7 +30,7 @@ def identity_audit_requests(config: dict) -> list[ExperimentRequest]:
         held_out_station=station,
         target_station=str(config["target_station"]),
         calibration_days=int(config["calibration_days"]),
-        metadata={"data_contract": config["data_contract"]},
+        metadata=request_metadata(config),
     )
     return [
         make_request(
@@ -85,7 +93,7 @@ def final_request(config: dict, mode: str, seed: int) -> ExperimentRequest:
             config["data_contract"]["target_history_role"]
         ),
         final_test=True,
-        metadata={"data_contract": config["data_contract"]},
+        metadata=request_metadata(config),
     )
 
 
@@ -109,5 +117,5 @@ def _cross_requests(
                     target_station=str(config["target_station"]),
                     calibration_days=int(config["calibration_days"]),
                     implementation_hash=implementation_for_mode(config, str(mode)),
-                    metadata={"data_contract": config["data_contract"]},
+                    metadata=request_metadata(config),
                 )

@@ -30,6 +30,7 @@ def validate_config(config: dict[str, Any]) -> None:
         "source_stations",
         "target_station",
         "baseline_implementation_id",
+        "weather",
         "data_contract",
         "calibration_days",
         "quick_seeds",
@@ -51,6 +52,27 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("target_station must not be included in source_stations")
     if not str(config["baseline_implementation_id"]).strip():
         raise ConfigError("baseline_implementation_id must be non-empty")
+
+    weather = config["weather"]
+    if not isinstance(weather, dict):
+        raise ConfigError("weather must be a JSON object")
+    columns = weather.get("future_columns")
+    if (
+        not isinstance(columns, list)
+        or not columns
+        or any(not str(column).strip() for column in columns)
+        or len(columns) != len(set(map(str, columns)))
+    ):
+        raise ConfigError(
+            "weather.future_columns must contain unique non-empty names"
+        )
+    future_index = weather.get("future_index")
+    if (
+        not isinstance(future_index, int)
+        or isinstance(future_index, bool)
+        or future_index < 0
+    ):
+        raise ConfigError("weather.future_index must be a nonnegative int")
 
     data_contract = config["data_contract"]
     required_data_keys = {

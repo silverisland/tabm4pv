@@ -1,6 +1,9 @@
 import json
 import unittest
+from copy import deepcopy
 from pathlib import Path
+
+from pvreglab.config import ConfigError, validate_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +24,16 @@ class SelfContainedLabTests(unittest.TestCase):
             (ROOT / "config.example.json").read_text(encoding="utf-8")
         )
         self.assertEqual(config["project_root"], ".")
+
+    def test_example_weather_configuration_is_validated(self):
+        config = json.loads(
+            (ROOT / "config.example.json").read_text(encoding="utf-8")
+        )
+        validate_config(config)
+        invalid = deepcopy(config)
+        invalid["weather"]["future_columns"] = ["ghi", "ghi"]
+        with self.assertRaises(ConfigError):
+            validate_config(invalid)
 
     def test_lab_python_does_not_import_parent_project_modules(self):
         for directory in (

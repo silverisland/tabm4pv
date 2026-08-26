@@ -93,6 +93,16 @@ def validate_adapter_result(
             raise ResultContractError(
                 "Target power and forecast weather use different physical indices"
             )
+        try:
+            configured_index = request["metadata"]["weather"]["future_index"]
+        except (KeyError, TypeError) as error:
+            raise ResultContractError(
+                "Request is missing configured weather future_index"
+            ) from error
+        if audit["target_index"] != configured_index:
+            raise ResultContractError(
+                "Adapter indices do not match configured weather future_index"
+            )
         if audit["evaluation_rows_in_train"] != 0:
             raise ResultContractError("Evaluation rows leaked into training")
         if audit["calibration_eval_overlap"] != 0:

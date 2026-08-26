@@ -15,7 +15,10 @@ private adapter without reading Python files outside `pv_registration_lab`.
 The scripts retain their original fixed constants intentionally. Do not run
 them blindly against the private target. The controlled entrypoint remains
 `adapters/project_adapter.py`, which must translate an experiment request into
-the corresponding data split and call equivalent pipeline logic.
+the corresponding data split and call equivalent pipeline logic. In controlled
+experiments, weather names and the shared target/weather array index come from
+`config.json`; the `FU_COV_COLUMNS` and `TARGET_INDEX` constants here are only
+historical references.
 
 Raw parquet files and `station_info.csv` remain external data inputs configured
 in `config.json`; no private data belongs in this directory.

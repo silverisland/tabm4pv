@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from adapters.data_utils import weather_spec_from_request
+
 
 def run_local_experiment(request: dict[str, Any]) -> dict[str, Any]:
     """Run the existing TabM pipeline for one controlled request.
@@ -34,9 +36,12 @@ def run_local_experiment(request: dict[str, Any]) -> dict[str, Any]:
     in references/adapter-contract.md; baseline and identity fingerprints must
     match exactly.
     """
+    weather = weather_spec_from_request(request)
     raise NotImplementedError(
         "Connect the bundled pipelines to this controlled adapter. Read "
-        "pipelines/README.md and references/adapter-contract.md first."
+        "pipelines/README.md and references/adapter-contract.md first. "
+        f"Configured weather columns={list(weather.future_columns)}, "
+        f"shared future index={weather.future_index}."
     )
 
 

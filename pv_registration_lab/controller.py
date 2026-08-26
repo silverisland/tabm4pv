@@ -31,6 +31,7 @@ from pvreglab.protocol import (
     final_request,
     identity_audit_requests,
     loso_requests,
+    request_metadata,
 )
 from pvreglab.registry import Registry
 from pvreglab.report import write_report
@@ -131,6 +132,11 @@ def check(config: dict, state_dir: Path) -> None:
     print(
         f"target capacity override: "
         f"{data_contract['capacity_overrides'][config['target_station']]}"
+    )
+    print(
+        "weather: "
+        f"{len(config['weather']['future_columns'])} columns, "
+        f"shared target index={config['weather']['future_index']}"
     )
     if data_contract["allows_future_source_data"]:
         print(
@@ -297,7 +303,7 @@ def main() -> None:
             calibration_days=int(config["calibration_days"]),
             implementation_hash=config["_implementation_hash"],
             hypothesis=args.hypothesis,
-            metadata={"data_contract": config["data_contract"]},
+            metadata=request_metadata(config),
         )
         runner.run_one(request)
     elif args.command == "next":

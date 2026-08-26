@@ -25,8 +25,11 @@ cp config.example.json config.json
 ```
 
 Set `data_contract.parquet_root`, `source_stations`, and the adapter command in
-`config.json`. Implement `adapters/project_adapter.py` using only bundled Python
-code. After the adapter is complete, initialize the protected protocol once:
+`config.json`. Set `weather.future_columns` to the future-array weather columns
+and `weather.future_index` to the physical target index used by both weather
+and `observe_power_future`. Implement `adapters/project_adapter.py` using only
+bundled Python code. After the adapter is complete, initialize the protected
+protocol once:
 
 ```bash
 python controller.py init

@@ -12,6 +12,15 @@
   "source_stations": ["station_a", "station_b", "station_c", "station_d"],
   "target_station": "雅砻江",
   "baseline_implementation_id": "private-tabm-baseline-v1",
+  "weather": {
+    "future_columns": [
+      "GHI_SOLARGIS_predict",
+      "TEMP_SOLARGIS_predict",
+      "WS_SOLARGIS_predict",
+      "WD_SOLARGIS_predict"
+    ],
+    "future_index": 15
+  },
   "data_contract": {
     "parquet_root": "/path/to/private/station_parquets",
     "parquet_glob": "station=*.parquet",

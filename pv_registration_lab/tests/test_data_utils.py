@@ -7,8 +7,11 @@ import pandas as pd
 from adapters.data_utils import (
     add_station_identity,
     discover_station_files,
+    extract_future_weather,
+    extract_future_target,
     load_capacity_map,
     select_target_periods,
+    weather_spec_from_request,
 )
 
 
@@ -73,6 +76,47 @@ class DataContractTests(unittest.TestCase):
             contract["parquet_root"] = str(root)
             files = discover_station_files(contract)
         self.assertEqual([path.name for path in files], ["station=a.parquet"])
+
+    def test_weather_columns_and_index_come_from_request(self):
+        request = {
+            "metadata": {
+                "weather": {
+                    "future_columns": ["ghi", "temperature"],
+                    "future_index": 2,
+                }
+            }
+        }
+        spec = weather_spec_from_request(request)
+        frame = pd.DataFrame(
+            {
+                "ghi": [[1.0, 2.0, 3.0]],
+                "temperature": [[10.0, 11.0, 12.0]],
+                "observe_power_future": [[100.0, 200.0, 300.0]],
+            }
+        )
+        actual = extract_future_weather(frame, spec)
+        target = extract_future_target(frame, "observe_power_future", spec)
+        self.assertEqual(spec.minimum_array_length, 3)
+        self.assertEqual(
+            actual.columns.tolist(),
+            ["ghi_target", "temperature_target"],
+        )
+        self.assertEqual(actual.iloc[0].tolist(), [3.0, 12.0])
+        self.assertEqual(target.iloc[0], 300.0)
+
+    def test_short_weather_array_is_rejected(self):
+        spec = weather_spec_from_request(
+            {
+                "metadata": {
+                    "weather": {
+                        "future_columns": ["ghi"],
+                        "future_index": 2,
+                    }
+                }
+            }
+        )
+        with self.assertRaises(ValueError):
+            extract_future_weather(pd.DataFrame({"ghi": [[1.0, 2.0]]}), spec)
 
 
 if __name__ == "__main__":

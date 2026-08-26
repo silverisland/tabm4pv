@@ -27,9 +27,22 @@ Important fields:
   "target_station": "...",
   "calibration_days": 21,
   "final_test": false,
-  "hypothesis": "..."
+  "hypothesis": "...",
+  "metadata": {
+    "weather": {
+      "future_columns": ["GHI_SOLARGIS_predict"],
+      "future_index": 15
+    }
+  }
 }
 ```
+
+Read configuration through `weather_spec_from_request`, then use
+`extract_future_weather` and `extract_future_target` from
+`adapters/data_utils.py`. Do not use the reference scripts' hard-coded
+`FU_COV_COLUMNS`. Both helpers consume the same `WeatherSpec`, so every weather
+array and `observe_power_future` use `weather.future_index`. The result audit
+must return this value as both `target_index` and `weather_index`.
 
 For pseudo-OOD evaluation, train TabM only on `training_stations`. The held-out
 station may use only its calibration subset to estimate registration. Evaluate

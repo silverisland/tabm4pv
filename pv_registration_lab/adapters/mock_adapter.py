@@ -38,6 +38,8 @@ def main() -> None:
     station = request["held_out_station"]
     mode = request["mode"]
     seed = request["seed"]
+    weather = request["metadata"]["weather"]
+    future_index = int(weather["future_index"])
     score = (
         0.906
         + stable_noise("station", station)
@@ -58,11 +60,14 @@ def main() -> None:
             "validation_rows_hash": stable_hash("validation", station, seed),
             "evaluation_rows_hash": stable_hash("evaluation", station, seed),
             "calibration_rows_hash": stable_hash("calibration", station),
-            "target_index": 15,
-            "weather_index": 15,
+            "target_index": future_index,
+            "weather_index": future_index,
             "capacity_map_hash": stable_hash("capacity-map-v1"),
             "model_config_hash": stable_hash("tabm-config-v1"),
-            "preprocessing_hash": stable_hash("preprocessing-v1"),
+            "preprocessing_hash": stable_hash(
+                "preprocessing-v1",
+                json.dumps(weather, sort_keys=True, ensure_ascii=False),
+            ),
             "evaluation_rows_in_train": 0,
             "calibration_eval_overlap": 0
         },
@@ -71,6 +76,7 @@ def main() -> None:
             "canonical_horizon_min": 3.8,
             "canonical_horizon_mean": 4.0,
             "canonical_horizon_max": 4.2,
+            "weather_feature_count": len(weather["future_columns"]),
         },
         "per_month": {str(month): score for month in range(1, 13)},
     }

@@ -24,7 +24,10 @@ class EvaluatorContractTests(unittest.TestCase):
         }
 
     def request(self):
-        return {"experiment_id": "abc"}
+        return {
+            "experiment_id": "abc",
+            "metadata": {"weather": {"future_index": 15}},
+        }
 
     def test_aggregate_result_is_allowed(self):
         payload = {
@@ -88,6 +91,20 @@ class EvaluatorContractTests(unittest.TestCase):
         payload["audit"]["weather_index"] = 16
         with self.assertRaises(ResultContractError):
             validate_adapter_result(payload, self.request())
+
+    def test_indices_must_match_configured_future_index(self):
+        payload = {
+            "experiment_id": "abc",
+            "status": "ok",
+            "score": 0.9,
+            "audit": self.audit(),
+            "diagnostics": {},
+            "per_month": {},
+        }
+        request = self.request()
+        request["metadata"]["weather"]["future_index"] = 16
+        with self.assertRaises(ResultContractError):
+            validate_adapter_result(payload, request)
 
     def test_numeric_timestamp_offset_diagnostic_is_allowed(self):
         payload = {
