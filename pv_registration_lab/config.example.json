@@ -1,0 +1,77 @@
+{
+  "project_root": ".",
+  "state_dir": ".lab_state",
+  "adapter_command": [
+    "{python}",
+    "adapters/mock_adapter.py",
+    "--request",
+    "{request}",
+    "--output",
+    "{output}"
+  ],
+  "source_stations": ["station_a", "station_b", "station_c", "station_d"],
+  "target_station": "雅砻江",
+  "baseline_implementation_id": "private-tabm-baseline-v1",
+  "weather": {
+    "future_columns": [
+      "GHI_SOLARGIS_predict",
+      "TEMP_SOLARGIS_predict",
+      "WS_SOLARGIS_predict",
+      "WD_SOLARGIS_predict"
+    ],
+    "future_index": 15
+  },
+  "data_contract": {
+    "parquet_root": "/path/to/private/station_parquets",
+    "parquet_glob": "station=*.parquet",
+    "station_info_path": "/home/ma-user/work/tabm_multi_stations/station_info.csv",
+    "station_info_station_column": "plantid",
+    "station_info_capacity_column": "GCCAPACITY",
+    "station_aliases": {
+      "雅砻江": "雅砻江",
+      "雅砻江解放站": "雅砻江"
+    },
+    "capacity_overrides": {
+      "雅砻江": 465.0
+    },
+    "target_history_raw_station": "雅砻江",
+    "target_history_start": "2024-01-01 00:00:00",
+    "target_history_end": "2024-12-31 23:59:59",
+    "target_evaluation_raw_station": "雅砻江解放站",
+    "target_evaluation_start": "2025-01-01 00:00:00",
+    "target_evaluation_end": "2025-12-31 23:59:59",
+    "target_history_role": "train_and_registration",
+    "source_time_policy": "all_available",
+    "allows_future_source_data": true
+  },
+  "quick_held_out_count": 2,
+  "calibration_days": 21,
+  "quick_seeds": [0],
+  "full_seeds": [0, 1, 2],
+  "candidate_modes": [
+    "phase_only",
+    "seasonal_shift",
+    "seasonal_three_point",
+    "history_warp"
+  ],
+  "identity_score_tolerance": 0.0003,
+  "acceptance": {
+    "min_mean_ood_gain": 0.001,
+    "min_positive_station_ratio": 0.6,
+    "max_worst_station_drop": 0.002
+  },
+  "budget": {
+    "max_iterations": 15,
+    "max_consecutive_failures": 4,
+    "command_timeout_seconds": 86400
+  },
+  "protected_paths": [
+    "controller.py",
+    "pvreglab",
+    "protected",
+    "pipelines",
+    "requirements.txt",
+    "adapters/project_adapter.py",
+    "adapters/data_utils.py"
+  ]
+}
