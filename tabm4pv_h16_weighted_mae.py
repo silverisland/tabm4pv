@@ -160,9 +160,10 @@ def load_dataset(data_root, prefix, suffix):
 
 
 def split_dataset(dataset):
-    # Preserve the original demo's ORIGIN-time split in all three experiments.
+    # Split all three experiments by forecast-origin time: 2024 development,
+    # with each month's final five calendar days held out, and 2025 test.
     ts = dataset['timestamp_win']
-    training = dataset.loc[ts.dt.year.eq(2024) & ts.dt.month.ge(9)].copy()
+    training = dataset.loc[ts.dt.year.eq(2024)].copy()
     test = dataset.loc[ts.dt.year.eq(2025)].copy()
     time = training['timestamp_win']
     is_validation = (time.dt.days_in_month - time.dt.day) < 5
@@ -170,7 +171,7 @@ def split_dataset(dataset):
                   'val': training.loc[is_validation].copy(), 'test': test}
     for name, frame in partitions.items():
         if frame.empty:
-            raise ValueError(f'Empty {name} partition under original 2024/2025 split')
+            raise ValueError(f'Empty {name} partition under full-year 2024/2025 split')
     return partitions
 
 
