@@ -21,7 +21,7 @@ def weighted_weather_features(
     stations: pd.DataFrame,
     origins: pd.DatetimeIndex,
     columns: list[str],
-    horizon_index: int,
+    array_index: int,
     config: Config,
 ) -> pd.DataFrame:
     names = config["data"]["columns"]
@@ -34,7 +34,7 @@ def weighted_weather_features(
 
     for column in columns:
         rows["__value"] = rows[column].map(
-            lambda value: array_at(value, horizon_index)
+            lambda value: array_at(value, array_index)
         )
         valid = rows.dropna(subset=["__capacity", "__value"]).copy()
         valid["__weighted"] = valid["__capacity"] * valid["__value"]
@@ -85,11 +85,27 @@ def _file_features(
     parts = [history]
     columns_by_horizon: dict[int, list[str]] = {}
     minutes = int(config["features"]["minutes_per_point"])
+    points_per_day = 24 * 60 // minutes
+    history_weather = list(
+        config["features"].get("history_weather_columns", [])
+    )
     for horizon in horizons:
         suffix = f"__h{horizon:02d}"
         current = weighted_weather_features(
             stations, origins, weather, horizon - 1, config
-        ).add_suffix(suffix)
+        )
+        if history_weather:
+            lag = points_per_day - horizon
+            historical = weighted_weather_features(
+                stations, origins, history_weather, -lag, config
+            ).rename(
+                columns={
+                    f"weighted__{column}__mean": f"weighted__{column}__lag{lag}"
+                    for column in history_weather
+                }
+            )
+            current = pd.concat([current, historical], axis=1)
+        current = current.add_suffix(suffix)
         target_time = origins + pd.Timedelta(minutes=horizon * minutes)
         hour = target_time.hour.to_numpy() + target_time.minute.to_numpy() / 60.0
         current[f"time__hour{suffix}"] = target_time.hour.to_numpy()

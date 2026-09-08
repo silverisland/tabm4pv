@@ -17,6 +17,11 @@ from .delivery import (
     save_delivery_frames,
 )
 from .features import build_feature_data
+from .metrics import (
+    metric_values,
+    primary_metric,
+    requested_metrics,
+)
 from .model import infer_array, load_one, resolve_device, seed_everything, train_one, transform
 
 
@@ -37,6 +42,12 @@ def _print_config(task: str, source: ConfigInput, config: Config) -> None:
         f"horizons={config['model'].get('horizons', 'all')}, "
         f"history_length={config['features']['history_length']}, "
         f"weather={config['features'].get('weather_columns', '<自动发现>')}"
+    )
+    print(
+        f"{task}参数：primary_metric={primary_metric(config)}, "
+        f"metrics={requested_metrics(config)}, "
+        f"capacity_floor_ratio="
+        f"{config.get('evaluation', {}).get('capacity_floor_ratio', 0.2)}"
     )
 
 
@@ -91,14 +102,6 @@ def _training_data(
         frame["__split"] = split
         parts.append(frame)
     return pd.concat(parts, ignore_index=True), columns, weather
-
-
-def _metrics(target: np.ndarray, prediction: np.ndarray) -> dict[str, float]:
-    error = prediction - target
-    return {
-        "rmse": float(np.sqrt(np.mean(error**2))),
-        "mae": float(np.mean(np.abs(error))),
-    }
 
 
 def _checkpoint(
@@ -214,7 +217,7 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
         )
         model_path = output_dir / "models" / f"model_h{horizon:02d}.pt"
         prediction = _predict_horizon(output_dir, model_path, test_frame, cfg)
-        score = _metrics(test_frame[target].to_numpy(), prediction)
+        score = metric_values(test_frame[target].to_numpy(), prediction, cfg)
         metrics.append(
             {
                 "horizon": horizon,
@@ -222,8 +225,7 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
                 * int(cfg["features"]["minutes_per_point"]),
                 "feature_count": len(columns),
                 **fit,
-                "test_rmse": score["rmse"],
-                "test_mae": score["mae"],
+                **{f"test_{name}": value for name, value in score.items()},
             }
         )
         result = test_frame[["timestamp", f"target_timestamp{suffix}", target]].rename(
@@ -244,7 +246,7 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
     metadata = {
         "horizons": horizons,
         "weather_columns": weather,
-        "mean_test_rmse": float(metrics_df["test_rmse"].mean()),
+        "primary_metric": primary_metric(cfg),
     }
     (output_dir / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -297,15 +299,15 @@ def test(
     )
     metrics = []
     for horizon, current in predictions.groupby("horizon", sort=True):
-        score = _metrics(
+        score = metric_values(
             current["target_power"].to_numpy(),
             current[INTERNAL_PREDICTION_COLUMN].to_numpy(),
+            cfg,
         )
         metrics.append({"horizon": int(horizon), "sample_count": len(current), **score})
-        print(
-            f"horizon={int(horizon):02d}：rmse={score['rmse']:.6f}, "
-            f"mae={score['mae']:.6f}"
-        )
+        values = ", ".join(f"{name}={value:.6f}" for name, value in score.items())
+        print(f"horizon={int(horizon):02d}：{values}")
+    metrics_df = pd.DataFrame(metrics)
     frames = delivery_frames(predictions, cfg, skip_incomplete=True)
     save_delivery_frames(frames, checkpoint_dir, cfg)
-    return pd.DataFrame(metrics), combine_delivery_frames(frames)
+    return metrics_df, combine_delivery_frames(frames)

@@ -118,9 +118,61 @@ def test_feature_values_and_column_order():
     assert features.loc[0, "weighted__ghi_predict__mean__h02"] == 20.0
     assert features.loc[0, "target_power__h02"] == 60.0
     expected_hour = 6.5
-    assert features.loc[0, "time__hour__h02"] == expected_hour
+    assert features.loc[0, "time__hour__h02"] == 6
     np.testing.assert_allclose(
         features.loc[0, ["time__hour_sin__h02", "time__hour_cos__h02"]],
         [np.sin(2 * np.pi * expected_hour / 24), np.cos(2 * np.pi * expected_hour / 24)],
         rtol=1e-6,
     )
+
+
+def test_horizon_aligned_history_weather_is_capacity_weighted():
+    config = {
+        "data": {
+            "province_station": "province_guangxi_solar",
+            "plant_station_pattern": r"^plant_guangfu\d{4}$",
+            "province_capacity": 15000.0,
+            "capacity_csv": None,
+            "columns": {
+                "timestamp": "timestamp_win",
+                "station": "station",
+                "capacity": "cap_power_on",
+                "power_history": "observe_power",
+                "power_future": "observe_power_future",
+            },
+        },
+        "features": {
+            "history_length": 4,
+            "minutes_per_point": 15,
+            "history_weather_columns": ["GHI_SOLARGIS"],
+            "weather_columns": ["ghi_predict"],
+        },
+    }
+    timestamp = pd.Timestamp("2026-08-17 06:00:00")
+    data = pd.DataFrame(
+        {
+            "timestamp_win": [timestamp] * 3,
+            "station": [
+                "province_guangxi_solar",
+                "plant_guangfu0001",
+                "plant_guangfu0002",
+            ],
+            "cap_power_on": [15000.0, 100.0, 300.0],
+            "observe_power": [np.zeros(4)] * 3,
+            "GHI_SOLARGIS": [
+                np.zeros(96),
+                np.arange(96, dtype=np.float32),
+                np.arange(96, dtype=np.float32) + 100.0,
+            ],
+            "ghi_predict": [np.zeros(16)] * 3,
+        }
+    )
+
+    features, columns, _ = build_feature_data(data, config, [1, 16])
+
+    h01 = "weighted__GHI_SOLARGIS__lag95__h01"
+    h16 = "weighted__GHI_SOLARGIS__lag80__h16"
+    assert h01 in columns[1]
+    assert h16 in columns[16]
+    assert features.loc[0, h01] == 76.0
+    assert features.loc[0, h16] == 91.0

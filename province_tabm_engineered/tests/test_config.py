@@ -21,6 +21,13 @@ def test_defaults_match_original_model_and_preprocessing():
         "start_scaling_init": "normal",
     }
     assert config["training"]["preprocessing"]["quantile_subsample"] == 10**9
+    assert config["training"]["loss"] == "weighted_mae"
+    assert config["evaluation"] == {
+        "primary_metric": "official_accuracy",
+        "metrics": ["rmse", "mae", "official_accuracy"],
+        "capacity_floor_ratio": 0.2,
+    }
+    assert config["features"]["history_weather_columns"] == ["GHI_SOLARGIS"]
     assert config["features"]["weather_columns"] == [
         "GHI_SOLARGIS_predict",
         "TEMP_SOLARGIS_predict",

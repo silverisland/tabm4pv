@@ -10,7 +10,7 @@ import tabm
 import torch
 
 from province_tabm_engineered.config import load_config
-from province_tabm_engineered.model import fit_preprocessor, make_model
+from province_tabm_engineered.model import fit_preprocessor, make_model, training_loss
 
 
 CONFIG_PATH = Path(__file__).parents[1] / "config.yaml"
@@ -60,3 +60,22 @@ def test_default_preprocessor_matches_original_fit_recipe():
 
     _, _, actual = fit_preprocessor(values, seed, config)
     np.testing.assert_allclose(actual, expected)
+
+
+def test_weighted_mae_loss_matches_official_normalized_error():
+    config = load_config(CONFIG_PATH)
+    prediction = torch.tensor([[0.1, 0.2], [0.4, 0.7]])
+    target_scaled = torch.tensor([0.0, 0.5])
+
+    actual = training_loss(prediction, target_scaled, config)
+
+    expected = torch.tensor((0.5 + 1.0 + 0.2 + 0.4) / 4)
+    torch.testing.assert_close(actual, expected)
+
+    config["training"]["loss"] = "mse"
+    expected_mse = torch.nn.functional.mse_loss(
+        prediction, target_scaled[:, None].expand_as(prediction)
+    )
+    torch.testing.assert_close(
+        training_loss(prediction, target_scaled, config), expected_mse
+    )

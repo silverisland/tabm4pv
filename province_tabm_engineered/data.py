@@ -169,7 +169,11 @@ def array_at(value: object, index: int) -> float:
         values = np.asarray(value, dtype=np.float32).reshape(-1)
     except (TypeError, ValueError):
         return float("nan")
-    return float(values[index]) if len(values) > index else float("nan")
+    return (
+        float(values[index])
+        if -len(values) <= index < len(values)
+        else float("nan")
+    )
 
 
 def history_values(value: object, length: int) -> np.ndarray:

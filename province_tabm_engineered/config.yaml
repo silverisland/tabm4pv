@@ -28,6 +28,9 @@ features:
   history_length: 96
   n_horizons: 16
   minutes_per_point: 15
+  # 每个 horizon 取昨日同一目标时刻，并按场站装机容量加权。
+  history_weather_columns:
+    - GHI_SOLARGIS
   weather_suffix: _predict
   weather_columns:
     - GHI_SOLARGIS_predict
@@ -51,6 +54,8 @@ model:
 
 training:
   seed: 2026
+  # 与官方指标分母一致；可改为 mse 恢复原训练损失。
+  loss: weighted_mae
   epochs: 200
   batch_size: 512
   inference_batch_size: 512
@@ -73,6 +78,13 @@ training:
     test_start: null
     validation_days: 2
     test_days: 2
+
+evaluation:
+  # official_accuracy 越大越好；改成 rmse/mae 时越小越好。
+  primary_metric: official_accuracy
+  metrics: [rmse, mae, official_accuracy]
+  # 官方分母 max(可用功率, capacity_floor_ratio * 装机容量)。
+  capacity_floor_ratio: 0.2
 
 output:
   checkpoint_dir: ./artifacts/tabm_v2

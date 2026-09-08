@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 
 from .config import Config
+from .metrics import better_score, initial_best_score, metric_values, primary_metric
 
 
 def resolve_device(value: str) -> torch.device:
@@ -98,6 +99,29 @@ def infer_array(
     return torch.cat(outputs).cpu().numpy().mean(axis=1) * target_scale
 
 
+def training_loss(
+    prediction: torch.Tensor,
+    target_scaled: torch.Tensor,
+    config: Config,
+) -> torch.Tensor:
+    """Calculate loss for every TabM member before ensemble averaging."""
+    target = target_scaled[:, None].expand_as(prediction)
+    loss_name = config["training"].get("loss", "mse")
+    if loss_name == "mse":
+        return nn.functional.mse_loss(prediction, target)
+    if loss_name != "weighted_mae":
+        raise ValueError(f"不支持的训练 loss：{loss_name}")
+
+    scale = float(config["model"]["target_scale"])
+    capacity = float(config["data"]["province_capacity"])
+    ratio = float(config.get("evaluation", {}).get("capacity_floor_ratio", 0.2))
+    if capacity <= 0 or ratio < 0:
+        raise ValueError("装机容量必须大于0，capacity_floor_ratio 不能小于0")
+    target_power = target * scale
+    denominator = target_power.clamp_min(ratio * capacity)
+    return ((prediction * scale - target_power) / denominator).abs().mean()
+
+
 def train_one(
     train_frame: pd.DataFrame,
     validation_frame: pd.DataFrame,
@@ -106,7 +130,7 @@ def train_one(
     horizon: int,
     config: Config,
     checkpoint_dir: Path,
-) -> dict[str, float | int]:
+) -> dict[str, Any]:
     train_cfg, model_cfg = config["training"], config["model"]
     seed = int(train_cfg["seed"])
     device = resolve_device(model_cfg.get("device", "auto"))
@@ -116,6 +140,7 @@ def train_one(
     y_val = validation_frame[target_name].to_numpy(dtype=np.float32)
     print(
         f"horizon={horizon:02d} 开始训练：device={device}, "
+        f"loss={train_cfg.get('loss', 'mse')}, "
         f"features={len(feature_names)}, train={len(train_frame):,}, "
         f"validation={len(validation_frame):,}"
     )
@@ -139,8 +164,11 @@ def train_one(
         weight_decay=float(train_cfg["weight_decay"]),
     )
 
+    selected_metric = primary_metric(config)
     best_state = deepcopy(model.state_dict())
-    best_epoch, best_rmse = -1, float("inf")
+    best_epoch = -1
+    best_score = initial_best_score(selected_metric)
+    best_metrics: dict[str, float] = {}
     patience = int(train_cfg["early_stopping_patience"])
     batch_size = int(train_cfg["batch_size"])
     target_scale = float(model_cfg["target_scale"])
@@ -152,8 +180,7 @@ def train_one(
         for batch in torch.randperm(len(x_train_t), device=device).split(batch_size):
             optimizer.zero_grad(set_to_none=True)
             prediction = model(x_train_t[batch], None).squeeze(-1).float()
-            target = y_train_t[batch].repeat_interleave(model.backbone.k)
-            loss = nn.functional.mse_loss(prediction.flatten(0, 1), target)
+            loss = training_loss(prediction, y_train_t[batch], config)
             loss.backward()
             clip = train_cfg.get("gradient_clipping_norm")
             if clip is not None:
@@ -171,15 +198,19 @@ def train_one(
             lower,
             upper,
         )
-        rmse = float(np.sqrt(np.mean((validation_prediction - y_val) ** 2)))
+        validation_metrics = metric_values(y_val, validation_prediction, config)
+        score = validation_metrics[selected_metric]
+        improved = better_score(score, best_score, selected_metric)
         if epoch == 0 or (epoch + 1) % log_every == 0:
             print(
                 f"horizon={horizon:02d} epoch={epoch + 1:03d}/"
-                f"{int(train_cfg['epochs']):03d} validation_rmse={rmse:.6f} "
-                f"best_rmse={min(best_rmse, rmse):.6f}"
+                f"{int(train_cfg['epochs']):03d} "
+                f"validation_{selected_metric}={score:.6f} "
+                f"best_{selected_metric}={score if improved else best_score:.6f}"
             )
-        if rmse < best_rmse:
-            best_rmse, best_epoch = rmse, epoch
+        if improved:
+            best_score, best_epoch = score, epoch
+            best_metrics = validation_metrics
             best_state = deepcopy(model.state_dict())
             patience = int(train_cfg["early_stopping_patience"])
         else:
@@ -188,7 +219,7 @@ def train_one(
                 print(
                     f"horizon={horizon:02d} early stopping："
                     f"epoch={epoch + 1}, best_epoch={best_epoch + 1}, "
-                    f"best_validation_rmse={best_rmse:.6f}"
+                    f"best_validation_{selected_metric}={best_score:.6f}"
                 )
                 break
 
@@ -208,6 +239,9 @@ def train_one(
             "horizon": horizon,
             "target_scale": target_scale,
             "best_epoch": best_epoch,
+            "primary_metric": selected_metric,
+            "best_validation_score": best_score,
+            "loss": train_cfg.get("loss", "mse"),
             "architecture": architecture,
         },
         model_path,
@@ -215,7 +249,12 @@ def train_one(
     joblib.dump(preprocessor, preprocessor_path)
     print(f"horizon={horizon:02d} 模型已保存：{model_path.resolve()}")
     print(f"horizon={horizon:02d} 预处理器已保存：{preprocessor_path.resolve()}")
-    return {"best_epoch": best_epoch, "validation_rmse": best_rmse}
+    return {
+        "best_epoch": best_epoch,
+        "primary_metric": selected_metric,
+        "best_validation_score": best_score,
+        **{f"validation_{name}": value for name, value in best_metrics.items()},
+    }
 
 
 def load_one(

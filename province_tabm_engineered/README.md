@@ -101,6 +101,30 @@ data:
 
 训练和推理可以使用不同设备；只需分别在配置中设置 `model.device` 为 `cpu`、`cuda:0` 或 `auto`。模型结构与特征配置应保持一致。
 
+## 评价指标
+
+评价指标由 config 控制：
+
+```yaml
+evaluation:
+  primary_metric: official_accuracy
+  metrics: [rmse, mae, official_accuracy]
+  capacity_floor_ratio: 0.2
+```
+
+`official_accuracy` 在每个 horizon 模型内部独立计算：`1 - mean(abs(预测功率 - 可用功率) / max(可用功率, 0.2 * 装机容量))`。不同 horizon 的指标不会再次合并。
+
+训练 loss 默认与该分母对齐：
+
+```yaml
+training:
+  loss: weighted_mae
+```
+
+`weighted_mae` 在物理功率尺度上计算每个 TabM 成员的 `abs(预测功率 - 可用功率) / max(可用功率, 0.2 * 装机容量)` 并求平均。它不先平均 TabM 成员，也不先平均 horizon。需要恢复原训练损失时，将 `loss` 改为 `mse`。
+
+训练时，每个 horizon 使用它自己的归一化准确率选择最佳 epoch；测试时也只输出各 horizon 自己的 RMSE、MAE 和 `official_accuracy`。如需保持原来的早停逻辑，只需将 `primary_metric` 改为 `rmse`。
+
 ## Checkpoint 结构
 
 ```text
