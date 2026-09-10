@@ -1,0 +1,10 @@
+joblib>=1.5
+lightgbm>=4.6
+numpy>=2.0
+openpyxl>=3.1
+pandas>=2.2
+pyarrow>=18
+PyYAML>=6.0
+scikit-learn>=1.6
+scipy>=1.13
+

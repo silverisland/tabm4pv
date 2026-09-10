@@ -1,0 +1,25 @@
+experiment:
+  name: demo_smoke
+  random_seed: 42
+
+data:
+  path: ../data/demo_station.parquet
+  format: parquet
+  station: DEMO_PV_STATION
+
+models:
+  persistence:
+    enabled: true
+  ridge:
+    enabled: true
+    alpha: 2.0
+  lightgbm:
+    enabled: true
+    n_estimators: 20
+    learning_rate: 0.08
+    num_leaves: 15
+    min_child_samples: 20
+
+output:
+  dir: ../outputs/demo_smoke
+  save_models: true

@@ -1,0 +1,80 @@
+experiment:
+  name: station_component_v1
+  random_seed: 42
+
+data:
+  # 相对路径按本配置文件所在目录解析，也可以填写绝对路径、目录或glob。
+  path: ../data/station_data.parquet
+  format: parquet
+  # null时自动选择行数最多的站点。
+  station: null
+  station_col: station
+  time_col: timestamp_win
+  capacity_col: cap_power_on
+  history_power_col: observe_power
+  target_col: observe_power_future
+  timezone: Asia/Shanghai
+  interval_minutes: 15
+  history_length: 672
+  future_length: 192
+  forecast_horizons: 16
+
+weather:
+  # 留空时自动发现成对的“历史字段”和“字段_predict”。
+  historical_columns: []
+  forecast_columns: []
+  forecast_suffix: _predict
+
+split:
+  mode: auto
+  train_ratio: 0.70
+  validation_ratio: 0.15
+  # 验证区前半段训练近期修正，后半段训练融合权重。
+  calibration_a_ratio: 0.50
+  # mode改为dates时，下面两个日期均按“包含该自然日”解释。
+  train_end: null
+  validation_end: null
+
+features:
+  power_lags: [1, 2, 4, 8, 16, 32, 96, 192, 288, 672]
+  stat_windows: [4, 16, 96, 192, 672]
+
+models:
+  persistence:
+    enabled: true
+  ridge:
+    enabled: true
+    alpha: 2.0
+  lightgbm:
+    enabled: true
+    n_estimators: 350
+    learning_rate: 0.04
+    num_leaves: 31
+    min_child_samples: 30
+    subsample: 0.9
+    colsample_bytree: 0.9
+  # 可接入已有TabM、TiDE或其他模型的DS结果。
+  # external_ds:
+  #   - name: tabm
+  #     path: /absolute/path/to/tabm_ds.parquet
+  external_ds: []
+
+correction:
+  enabled: true
+  base_model: lightgbm
+  alpha: 5.0
+
+fusion:
+  enabled: true
+  granularity: horizon
+
+evaluation:
+  capacity_floor_ratio: 0.20
+  missing_normalized_error: 1.0
+  rise_ratio: 1.30
+  drop_ratio: 0.70
+
+output:
+  dir: ../outputs/station_component_v1
+  save_models: true
+
