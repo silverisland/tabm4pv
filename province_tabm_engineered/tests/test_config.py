@@ -20,6 +20,7 @@ def test_defaults_match_original_model_and_preprocessing():
         "arch_type": "tabm",
         "start_scaling_init": "normal",
     }
+    assert config["training"]["preprocessing"]["use_imputer"] is True
     assert config["training"]["preprocessing"]["quantile_subsample"] == 10**9
     assert config["training"]["loss"] == "weighted_mae"
     assert config["evaluation"] == {

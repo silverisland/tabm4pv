@@ -257,9 +257,19 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
     (output_dir / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"训练完成：checkpoint={output_dir}")
+    deployment_dir = None
+    if horizons == list(range(1, int(cfg["features"]["n_horizons"]) + 1)):
+        from .export_checkpoint import export_checkpoint
+
+        deployment_dir = export_checkpoint(
+            output_dir, output_dir / "deployment", overwrite=True
+        )
+    else:
+        print("本次仅训练部分 horizon，跳过完整 backbone 导出")
+    print(f"训练完成：checkpoint={output_dir}, deployment={deployment_dir}")
     return {
         "checkpoint_dir": output_dir,
+        "deployment_dir": deployment_dir,
         "metrics": metrics_df,
         "predictions": predictions_df,
     }

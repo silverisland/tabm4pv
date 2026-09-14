@@ -10,7 +10,12 @@ import tabm
 import torch
 
 from province_tabm_engineered.config import load_config
-from province_tabm_engineered.model import fit_preprocessor, make_model, training_loss
+from province_tabm_engineered.model import (
+    fit_preprocessor,
+    make_model,
+    training_loss,
+    transform,
+)
 
 
 CONFIG_PATH = Path(__file__).parents[1] / "config.yaml"
@@ -60,6 +65,22 @@ def test_default_preprocessor_matches_original_fit_recipe():
 
     _, _, actual = fit_preprocessor(values, seed, config)
     np.testing.assert_allclose(actual, expected)
+
+
+def test_preprocessor_can_skip_imputation():
+    config = load_config(CONFIG_PATH)
+    config["training"]["preprocessing"]["use_imputer"] = False
+    values = np.random.default_rng(42).normal(size=(300, 8)).astype(np.float32)
+
+    imputer, transformer, actual = fit_preprocessor(values, 2027, config)
+
+    assert imputer is None
+    preprocessor = {"imputer": imputer, "quantile_transformer": transformer}
+    np.testing.assert_allclose(transform(preprocessor, values), actual)
+
+    values[0, 0] = np.nan
+    with np.testing.assert_raises_regex(ValueError, "上游完成缺失值"):
+        transform(preprocessor, values)
 
 
 def test_weighted_mae_loss_matches_official_normalized_error():

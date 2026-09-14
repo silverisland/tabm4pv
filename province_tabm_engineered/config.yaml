@@ -80,6 +80,8 @@ training:
   weight_decay: 0.0003
   gradient_clipping_norm: 1.0
   preprocessing:
+    # false 表示数据已在上游完成缺失值处理，训练和推理均跳过 SimpleImputer。
+    use_imputer: true
     noise_std: 0.00001
     min_quantiles: 10
     max_quantiles: 1000

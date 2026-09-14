@@ -8,14 +8,13 @@ from typing import Any
 import joblib
 import numpy as np
 import pandas as pd
-import rtdl_num_embeddings
 import sklearn.impute
 import sklearn.preprocessing
-import tabm
 import torch
 import torch.nn as nn
 
 from .config import Config
+from .architecture import make_model
 from .metrics import better_score, initial_best_score, metric_values, primary_metric
 
 
@@ -36,31 +35,30 @@ def seed_everything(seed: int) -> None:
     #     torch.cuda.manual_seed_all(seed + 2)
 
 
-def make_model(
-    n_features: int, device: torch.device, architecture: dict | None = None
-) -> torch.nn.Module:
-    embeddings = rtdl_num_embeddings.LinearReLUEmbeddings(n_features)
-    return tabm.TabM.make(
-        n_num_features=n_features,
-        cat_cardinalities=[],
-        d_out=1,
-        num_embeddings=embeddings,
-        **(architecture or {}),
-    ).to(device)
-
-
 def fit_preprocessor(
     x_train: np.ndarray, seed: int, config: Config
-) -> tuple[object, object, np.ndarray]:
-    imputer = sklearn.impute.SimpleImputer(strategy="median", keep_empty_features=True)
-    imputed = imputer.fit_transform(x_train).astype(np.float32)
+) -> tuple[object | None, object, np.ndarray]:
     preprocessing = config["training"].get("preprocessing", {})
+    use_imputer = bool(preprocessing.get("use_imputer", True))
+    if use_imputer:
+        imputer = sklearn.impute.SimpleImputer(
+            strategy="median", keep_empty_features=True
+        )
+        prepared = imputer.fit_transform(x_train).astype(np.float32)
+    else:
+        imputer = None
+        prepared = np.asarray(x_train, dtype=np.float32)
+        if not np.isfinite(prepared).all():
+            raise ValueError(
+                "training.preprocessing.use_imputer=false 时，"
+                "训练特征必须已在上游完成缺失值和无穷值处理"
+            )
     noise = np.random.default_rng(seed).normal(
-        0.0, float(preprocessing.get("noise_std", 1e-5)), imputed.shape
+        0.0, float(preprocessing.get("noise_std", 1e-5)), prepared.shape
     ).astype(np.float32)
     n_quantiles = max(
                       min(
-                          len(imputed) // int(preprocessing.get("samples_per_quantile", 30)),
+                          len(prepared) // int(preprocessing.get("samples_per_quantile", 30)),
                           int(preprocessing.get("max_quantiles", 1000)),
                       ),
                       int(preprocessing.get("min_quantiles", 10)),
@@ -70,13 +68,21 @@ def fit_preprocessor(
         output_distribution="normal",
         subsample=int(preprocessing.get("quantile_subsample", 10**9)),
         random_state=seed,
-    ).fit(imputed + noise)
-    return imputer, transformer, transformer.transform(imputed).astype(np.float32)
+    ).fit(prepared + noise)
+    return imputer, transformer, transformer.transform(prepared).astype(np.float32)
 
 
 def transform(preprocessor: dict[str, Any], values: np.ndarray) -> np.ndarray:
-    imputed = preprocessor["imputer"].transform(values).astype(np.float32)
-    return preprocessor["quantile_transformer"].transform(imputed).astype(np.float32)
+    imputer = preprocessor.get("imputer")
+    prepared = np.asarray(values, dtype=np.float32)
+    if imputer is not None:
+        prepared = imputer.transform(prepared).astype(np.float32)
+    elif not np.isfinite(prepared).all():
+        raise ValueError(
+            "当前 checkpoint 未启用 sklearn 缺失值填充，"
+            "推理特征必须已在上游完成缺失值和无穷值处理"
+        )
+    return preprocessor["quantile_transformer"].transform(prepared).astype(np.float32)
 
 
 @torch.inference_mode()
@@ -141,6 +147,7 @@ def train_one(
     print(
         f"horizon={horizon:02d} 开始训练：device={device}, "
         f"loss={train_cfg.get('loss', 'mse')}, "
+        f"use_imputer={train_cfg.get('preprocessing', {}).get('use_imputer', True)}, "
         f"features={len(feature_names)}, train={len(train_frame):,}, "
         f"validation={len(validation_frame):,}"
     )
@@ -283,11 +290,16 @@ def load_one(
         / f"preprocessor_h{horizon:02d}.joblib"
     )
     preprocessor = joblib.load(preprocessor_path)
-    imputer = preprocessor["imputer"]
+    imputer = preprocessor.get("imputer")
     transformer = preprocessor["quantile_transformer"]
+    imputer_info = (
+        "disabled"
+        if imputer is None
+        else str(getattr(imputer, "n_features_in_", "<unknown>"))
+    )
     print(
         f"加载预处理器：{preprocessor_path.resolve()}；"
-        f"imputer_features={getattr(imputer, 'n_features_in_', '<unknown>')}, "
+        f"imputer_features={imputer_info}, "
         f"quantiles={getattr(transformer, 'n_quantiles_', '<unknown>')}, "
         f"output_distribution={getattr(transformer, 'output_distribution', '<unknown>')}"
     )

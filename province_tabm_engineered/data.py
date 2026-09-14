@@ -85,6 +85,8 @@ def _paths(value: str | Path | Sequence[str | Path], file_glob: str) -> list[Pat
 
 def _capacity_mapping(config: Config) -> pd.Series | None:
     data_cfg = config["data"]
+    if data_cfg.get("capacity_mapping") is not None:
+        return pd.Series(data_cfg["capacity_mapping"], dtype=float)
     capacity_csv = data_cfg.get("capacity_csv")
     if not capacity_csv:
         return None

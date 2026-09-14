@@ -9,7 +9,7 @@
 - TabM 使用 `LinearReLUEmbeddings`，默认结构为 2 个 block、`d_block=512`、`dropout=0.1`、`k=32` 和 `arch_type=tabm`。
 - 每个 horizon 独立训练一个模型，目标按 15000 缩放，预测裁剪到 `[0, 15750]`。
 - 默认功率取 `observe_power[-96:-2]`（94点），排除最新两个可能被治理填补的点；另加入逐 horizon 的历史、未来加权气象和时间特征。
-- 缺失值中位数填充与 `QuantileTransformer` 只在训练集上拟合；默认 quantile 数量、微小噪声和 `subsample=10**9` 与原脚本一致。
+- 缺失值中位数填充与 `QuantileTransformer` 只在训练集上拟合；`training.preprocessing.use_imputer: false` 可在上游已处理缺失值时跳过 `SimpleImputer`，默认仍启用以保持原版行为。
 - 默认仍从 `/jtdata/products/data/info.csv` 覆盖场站容量；如果传入数据的 `cap_power_on` 已经可信，可将 `data.capacity_csv` 设置为 `null`。
 
 训练、验证和测试通过 `data.date_ranges` 或 `training.split` 划分。
@@ -168,10 +168,78 @@ artifacts/tabm_v2/
 ├── metadata.json
 ├── metrics_by_horizon.csv
 ├── models/model_h01.pt ... model_h16.pt
-└── preprocessors/preprocessor_h01.joblib ... preprocessor_h16.joblib
+├── preprocessors/preprocessor_h01.joblib ... preprocessor_h16.joblib
+└── deployment/
+    ├── model.safetensors
+    └── model_config.json
 ```
 
 新checkpoint的metadata.json保存完整features配置，config_resolved.yaml保存完整训练配置。test()/predict()/Model.inference()自动沿用checkpoint中的features；输入配置不同时会print提示。每个子模型仍按其保存的有序feature_names选列。设备、数据路径、容量表及输出配置仍来自调用方；原始字段映射应与训练一致。
+
+## 接入推理 backbone
+
+`backbone.py` 提供 `ProvinceTabMBackbone(nn.Module)` 与 `build_model()` 注册示例。
+它通过 `ModuleDict` 注册所有 horizon 的 TabM，通过 buffer 保存中位数和分位点；
+`load_state_dict(strict=True)` 一次加载模型权重与预处理参数。
+完整训练结束时会自动导出到 `checkpoint_dir/deployment/`，无需再手动执行导出：
+
+```python
+result = train(config, data)
+deployment_dir = result["deployment_dir"]
+```
+
+重复训练会更新该目录的两个部署文件；原 `.pt` 和 `.joblib` 仍正常保存。
+如果 `model.horizons` 仅选择部分 horizon，则跳过导出，`deployment_dir` 返回 `None`。
+导出失败会直接报错，不会打印训练全部完成，已经保存的训练 checkpoint 可用于重试导出。
+
+对于之前训练好的 checkpoint，仍可单独运行：
+
+```bash
+python -m province_tabm_engineered.export_checkpoint \
+  --checkpoint artifacts/tabm_v2 \
+  --output artifacts/tabm_deployment
+```
+
+导出目录须为空。默认读取训练目录中的 `config_resolved.yaml`，也可通过 `--config`
+指定配置；特征规则优先取 `metadata.json`。适用于当前 `history/future` 特征配置的
+完整 checkpoint，支持 16/20 个或其他配置数量的连续 horizon。
+
+部署目录仅包含 `model.safetensors` 和 `model_config.json`，不需要 joblib 文件。
+训练时启用了 Imputer 就导出中位数，关闭时保持不填充；QuantileTransformer 的
+重复分位点双向插值、正态映射及边界截断由 PyTorch 完成。
+若使用容量 CSV，导出时将其快照写入配置的 `data.capacity_mapping`，部署无需原 CSV。
+
+在你们框架的 `build_model()` 中为 `province_tabm` 注册 `ProvinceTabMBackbone`，
+加载与调用方式如下（配置必须使用导出版本）：
+
+```python
+import json
+from pathlib import Path
+from safetensors.torch import load_file
+from province_tabm_engineered.backbone import build_model
+
+directory = Path("artifacts/tabm_v2/deployment")
+model_config = json.loads((directory / "model_config.json").read_text())
+model = build_model("province_tabm", model_config)
+state_dict = load_file(str(directory / "model.safetensors"))
+model.load_state_dict(state_dict, strict=True)
+model.to("cpu").eval()  # GPU 部署时改为 "cuda:0"
+
+result = model.inference(df)  # 等价于 model(df)
+```
+
+输入仍为含省级行和场站行的 DataFrame，可有多个起报时间。`cap_power_on` 支持标量和
+非空序列（取首项）。标签字段可缺省或为 null。输出为 `timestamp_win`、`station`、
+`observe_power_predict` 三列，最后一列每行是长度等于 horizon 数量的 `float32 ndarray`；
+返回结果不写本地文件。每次构造都需要先加载权重再推理，调用端负责 `.eval()`。
+
+部署依赖见 `requirements-inference.txt`，不要求安装 sklearn/joblib。导出需在能正常
+读取原 joblib 的训练环境执行。代码仍需随服务部署，并非只复制两个参数文件即可运行。
+DataFrame 特征工程运行在 CPU，张量预处理和 TabM 支持 CPU/CUDA；当前实现使用 float64
+分位点进行插值，使用 `.to(device)` 切换设备，不要对整个包装模型调用 `.half()`。
+
+回归测试覆盖分位数边界和重复值、启用/关闭填充、16/20 个模型导出后的预测对齐，以及
+禁止导入 sklearn/joblib 的独立进程推理。不同设备可能存在浮点误差，不承诺逐位相同。
 
 ## print 运行信息
 
