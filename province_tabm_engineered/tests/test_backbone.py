@@ -1,6 +1,5 @@
 """Deployment parity: sklearn preprocessing, strict load, and full predictions."""
 
-import json
 from datetime import date
 import subprocess
 import sys
@@ -13,6 +12,7 @@ from safetensors.torch import load_file
 from sklearn.preprocessing import QuantileTransformer
 
 from province_tabm_engineered.backbone import TorchPreprocessor, build_model
+from province_tabm_engineered.config import load_config
 from province_tabm_engineered.export_checkpoint import export_checkpoint
 from province_tabm_engineered.inference import Model
 from province_tabm_engineered.api import train
@@ -91,13 +91,13 @@ def test_export_and_strict_backbone_inference_parity(tmp_path):
         assert deployment == checkpoint / "deployment"
         if horizons == 20:
             manual = export_checkpoint(checkpoint, tmp_path / "manual_deployment")
-            assert (manual / "model_config.json").read_text() == (deployment / "model_config.json").read_text()
+            assert (manual / "model_config.yaml").read_text() == (deployment / "model_config.yaml").read_text()
             manual_state = load_file(str(manual / "model.safetensors"))
             for key, tensor in load_file(str(deployment / "model.safetensors")).items():
                 torch.testing.assert_close(manual_state[key], tensor)
-        model_config = json.loads((deployment / "model_config.json").read_text())
-        assert model_config["data"]["date_ranges"]["train"]["start"] == "2026-08-01"
-        assert sorted(p.name for p in deployment.iterdir()) == ["model.safetensors", "model_config.json"]
+        model_config = load_config(deployment / "model_config.yaml")
+        assert str(model_config["data"]["date_ranges"]["train"]["start"]) == "2026-08-01"
+        assert sorted(p.name for p in deployment.iterdir()) == ["model.safetensors", "model_config.yaml"]
         assert model_config["data"]["capacity_csv"] is None
         assert model_config["data"]["capacity_mapping"]["plant_guangfu0001"] == 123
         new = build_model("province_tabm", model_config)
@@ -149,13 +149,13 @@ class BlockTrainingDependencies(importlib.abc.MetaPathFinder):
         if fullname.split('.')[0] in {'sklearn', 'joblib'}:
             raise ImportError('Deployment imported training dependency: ' + fullname)
 sys.meta_path.insert(0, BlockTrainingDependencies())
-import json
 import pandas as pd
 from safetensors.torch import load_file
 from province_tabm_engineered.backbone import build_model
+from province_tabm_engineered.config import load_config
 from pathlib import Path
 directory = Path(sys.argv[1])
-model = build_model('province_tabm', json.loads((directory / 'model_config.json').read_text()))
+model = build_model('province_tabm', load_config(directory / 'model_config.yaml'))
 model.load_state_dict(load_file(str(directory / 'model.safetensors')), strict=True)
 model.eval()
 result = model(pd.read_parquet(sys.argv[2]))

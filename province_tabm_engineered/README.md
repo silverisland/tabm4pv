@@ -171,7 +171,7 @@ artifacts/tabm_v2/
 ├── preprocessors/preprocessor_h01.joblib ... preprocessor_h16.joblib
 └── deployment/
     ├── model.safetensors
-    └── model_config.json
+    └── model_config.yaml
 ```
 
 新checkpoint的metadata.json保存完整features配置，config_resolved.yaml保存完整训练配置。test()/predict()/Model.inference()自动沿用checkpoint中的features；输入配置不同时会print提示。每个子模型仍按其保存的有序feature_names选列。设备、数据路径、容量表及输出配置仍来自调用方；原始字段映射应与训练一致。
@@ -204,7 +204,7 @@ python -m province_tabm_engineered.export_checkpoint \
 指定配置；特征规则优先取 `metadata.json`。适用于当前 `history/future` 特征配置的
 完整 checkpoint，支持 16/20 个或其他配置数量的连续 horizon。
 
-部署目录仅包含 `model.safetensors` 和 `model_config.json`，不需要 joblib 文件。
+部署目录仅包含 `model.safetensors` 和 `model_config.yaml`，不需要 joblib 文件。
 训练时启用了 Imputer 就导出中位数，关闭时保持不填充；QuantileTransformer 的
 重复分位点双向插值、正态映射及边界截断由 PyTorch 完成。
 若使用容量 CSV，导出时将其快照写入配置的 `data.capacity_mapping`，部署无需原 CSV。
@@ -213,13 +213,13 @@ python -m province_tabm_engineered.export_checkpoint \
 加载与调用方式如下（配置必须使用导出版本）：
 
 ```python
-import json
 from pathlib import Path
 from safetensors.torch import load_file
 from province_tabm_engineered.backbone import build_model
+from province_tabm_engineered.config import load_config
 
 directory = Path("artifacts/tabm_v2/deployment")
-model_config = json.loads((directory / "model_config.json").read_text())
+model_config = load_config(directory / "model_config.yaml")
 model = build_model("province_tabm", model_config)
 state_dict = load_file(str(directory / "model.safetensors"))
 model.load_state_dict(state_dict, strict=True)

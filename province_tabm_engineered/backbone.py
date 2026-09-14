@@ -80,7 +80,7 @@ class ProvinceTabMBackbone(nn.Module):
         super().__init__()
         self.config = deepcopy(model_config)
         if self.config.get("deployment_version") != 1:
-            raise ValueError("请使用 export_checkpoint 导出的 model_config.json")
+            raise ValueError("请使用 export_checkpoint 导出的 model_config.yaml")
         self.specs = self.config["horizon_specs"]
         self.horizons = [int(spec["horizon"]) for spec in self.specs]
         expected = list(range(1, int(self.config["features"]["n_horizons"]) + 1))

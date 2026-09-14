@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from datetime import date
 import json
 from pathlib import Path
 import sys
@@ -20,19 +19,12 @@ from safetensors.torch import save_file
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from province_tabm_engineered.backbone import ProvinceTabMBackbone
-    from province_tabm_engineered.config import load_config
+    from province_tabm_engineered.config import dump_config, load_config
     from province_tabm_engineered.data import _capacity_mapping
 else:
     from .backbone import ProvinceTabMBackbone
-    from .config import load_config
+    from .config import dump_config, load_config
     from .data import _capacity_mapping
-
-
-def _json_default(value):
-    # YAML loads unquoted dates as date/datetime objects.
-    if isinstance(value, date):
-        return value.isoformat()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def export_checkpoint(checkpoint_dir: str | Path, output_dir: str | Path,
@@ -115,13 +107,10 @@ def export_checkpoint(checkpoint_dir: str | Path, output_dir: str | Path,
     # Validate the exact host pipeline before writing deployment artifacts.
     model = ProvinceTabMBackbone(cfg)
     model.load_state_dict(state, strict=True)
-    config_text = json.dumps(
-        cfg, ensure_ascii=False, indent=2, allow_nan=False, default=_json_default
-    )
     destination.mkdir(parents=True, exist_ok=True)
     save_file(state, str(destination / "model.safetensors"))
-    (destination / "model_config.json").write_text(config_text, encoding="utf-8")
-    print(f"导出完成：{destination / 'model.safetensors'}；{destination / 'model_config.json'}")
+    dump_config(cfg, destination / "model_config.yaml")
+    print(f"导出完成：{destination / 'model.safetensors'}；{destination / 'model_config.yaml'}")
     return destination
 
 
