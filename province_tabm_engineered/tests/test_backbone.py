@@ -1,6 +1,7 @@
 """Deployment parity: sklearn preprocessing, strict load, and full predictions."""
 
 import json
+from datetime import date
 import subprocess
 import sys
 from pathlib import Path
@@ -59,7 +60,10 @@ def test_export_and_strict_backbone_inference_parity(tmp_path):
         cfg = _config()
         cfg["features"]["n_horizons"] = horizons
         cfg["data"]["date_ranges"] = {
-            split: {"start": f"2026-08-0{day}", "end": f"2026-08-0{day}"}
+            split: {
+                bound: date(2026, 8, day) if use_imputer else f"2026-08-0{day}"
+                for bound in ("start", "end")
+            }
             for day, split in enumerate(["train", "validation", "test"], 1)
         }
         cfg["model"]["device"] = "cpu"
@@ -92,6 +96,7 @@ def test_export_and_strict_backbone_inference_parity(tmp_path):
             for key, tensor in load_file(str(deployment / "model.safetensors")).items():
                 torch.testing.assert_close(manual_state[key], tensor)
         model_config = json.loads((deployment / "model_config.json").read_text())
+        assert model_config["data"]["date_ranges"]["train"]["start"] == "2026-08-01"
         assert sorted(p.name for p in deployment.iterdir()) == ["model.safetensors", "model_config.json"]
         assert model_config["data"]["capacity_csv"] is None
         assert model_config["data"]["capacity_mapping"]["plant_guangfu0001"] == 123
