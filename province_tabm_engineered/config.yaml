@@ -13,6 +13,8 @@ data:
   province_station: province_guangxi_solar
   plant_station_pattern: "^plant_guangfu\\d{4}$"
   province_capacity: 15000.0
+  # forward(dict) 中 timestamp_win int64 的时间单位；datetime64 默认使用 ns。
+  tensor_timestamp_unit: ns
   # 保持原脚本行为：用该表覆盖场站装机容量；若输入数据已正确填充则设为 null。
   capacity_csv: /jtdata/products/data/info.csv
   capacity_station_column: plant_pointname

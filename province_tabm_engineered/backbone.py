@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 
 import numpy as np
@@ -99,10 +100,63 @@ class ProvinceTabMBackbone(nn.Module):
         self.eval()
         print(f"构建 ProvinceTabMBackbone：horizons={self.horizons}；等待 load_state_dict 加载权重和预处理参数")
 
+    def _to_dataframe(
+        self, data: pd.DataFrame | Mapping[str, torch.Tensor | list[str]]
+    ) -> pd.DataFrame:
+        if isinstance(data, pd.DataFrame):
+            return data.copy()
+        if not isinstance(data, Mapping):
+            raise TypeError("forward() 输入必须是 DataFrame 或 dict[str, Tensor | list[str]]")
+
+        names = self.config["data"]["columns"]
+        timestamp_col, station_col = names["timestamp"], names["station"]
+        if timestamp_col not in data or station_col not in data:
+            raise ValueError(f"输入 dict 必须包含 {timestamp_col} 和 {station_col}")
+
+        columns = {}
+        row_count = None
+        for name, value in data.items():
+            if name == station_col:
+                if not isinstance(value, (list, tuple)) or not all(
+                    isinstance(station, str) for station in value
+                ):
+                    raise TypeError(f"{station_col} 必须是 list[str]")
+                column = list(value)
+            else:
+                if not isinstance(value, torch.Tensor):
+                    raise TypeError(f"{name} 必须是 torch.Tensor")
+                tensor = value.detach().cpu()
+                if tensor.ndim == 0:
+                    raise ValueError(f"{name} 至少需要 batch 维度")
+                if name != timestamp_col and tensor.dtype == torch.bfloat16:
+                    tensor = tensor.float()
+                if name == timestamp_col:
+                    if tensor.ndim == 2 and tensor.shape[1] == 1:
+                        tensor = tensor[:, 0]
+                    if tensor.ndim != 1 or tensor.dtype != torch.int64:
+                        raise TypeError(f"{timestamp_col} 必须是形状 [B] 或 [B, 1] 的 int64 Tensor")
+                    unit = self.config["data"].get("tensor_timestamp_unit", "ns")
+                    column = pd.to_datetime(tensor.numpy(), unit=unit, errors="raise")
+                elif tensor.ndim == 1:
+                    column = tensor.numpy()
+                else:
+                    column = [row.numpy().copy() for row in tensor]
+
+            if row_count is None:
+                row_count = len(column)
+            elif len(column) != row_count:
+                raise ValueError(
+                    f"输入列长度不一致：expected={row_count}, {name}={len(column)}"
+                )
+            columns[name] = column
+        return pd.DataFrame(columns)
+
     @torch.inference_mode()
-    def forward(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Return timestamp_win, station, and an ndarray per forecast origin."""
-        df = df.copy()
+    def forward(
+        self, data: pd.DataFrame | Mapping[str, torch.Tensor | list[str]]
+    ) -> pd.DataFrame:
+        """Predict from a DataFrame or a column-name-to-tensor batch dict."""
+        df = self._to_dataframe(data)
         capacity_col = self.config["data"]["columns"]["capacity"]
         if capacity_col not in df:
             raise ValueError(f"输入 DataFrame 缺少容量列：{capacity_col}")
@@ -139,13 +193,17 @@ class ProvinceTabMBackbone(nn.Module):
             print(f"horizon={horizon:02d} 推理完成：rows={len(frame):,}, device={parameter.device}")
         matrix = np.column_stack(predictions).astype(np.float32, copy=False)
         return pd.DataFrame({
-            "timestamp_win": pd.to_datetime(frame["timestamp"]).to_numpy(),
+            "timestamp_win": pd.to_datetime(frame["timestamp"]).to_numpy(
+                dtype="datetime64[ns]"
+            ),
             "station": [self.config["data"]["province_station"]] * len(frame),
             "observe_power_predict": [row.copy() for row in matrix],
         })
 
-    def inference(self, df: pd.DataFrame) -> pd.DataFrame:
-        return self(df)
+    def inference(
+        self, data: pd.DataFrame | Mapping[str, torch.Tensor | list[str]]
+    ) -> pd.DataFrame:
+        return self(data)
 
 
 def build_model(model_name: str, model_config: dict) -> nn.Module:

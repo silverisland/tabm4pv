@@ -121,12 +121,36 @@ def test_export_and_strict_backbone_inference_parity(tmp_path):
         # Prove the exported model doesn't need the source CSV at inference.
         capacity_path.rename(capacity_path.with_suffix(".unused"))
         actual = new(inputs)
-        pd.testing.assert_frame_equal(actual.iloc[:, :2], expected.iloc[:, :2])
+        pd.testing.assert_frame_equal(
+            actual.iloc[:, :2], expected.iloc[:, :2], check_dtype=False
+        )
         np.testing.assert_allclose(
             np.stack(actual["observe_power_predict"]),
             np.stack(expected["observe_power_predict"]), rtol=1e-5, atol=0.01,
         )
         assert actual["observe_power_predict"].map(len).eq(horizons).all()
+        tensor_input = {}
+        for name in inputs:
+            values = inputs[name]
+            if name == "station":
+                tensor_input[name] = values.tolist()
+            elif name == "timestamp_win":
+                tensor_input[name] = torch.tensor(
+                    pd.to_datetime(values)
+                    .to_numpy(dtype="datetime64[ns]")
+                    .astype(np.int64),
+                    dtype=torch.int64,
+                )
+            elif isinstance(values.iloc[0], np.ndarray):
+                tensor_input[name] = torch.tensor(np.stack(values))
+            else:
+                tensor_input[name] = torch.tensor(values.to_numpy())
+        tensor_actual = new(tensor_input)
+        pd.testing.assert_frame_equal(tensor_actual.iloc[:, :2], actual.iloc[:, :2])
+        np.testing.assert_array_equal(
+            np.stack(tensor_actual["observe_power_predict"]),
+            np.stack(actual["observe_power_predict"]),
+        )
         # Null target cells cannot affect inference.
         inputs["observe_power_future"] = None
         np.testing.assert_array_equal(

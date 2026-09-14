@@ -228,8 +228,13 @@ model.to("cpu").eval()  # GPU 部署时改为 "cuda:0"
 result = model.inference(df)  # 等价于 model(df)
 ```
 
-输入仍为含省级行和场站行的 DataFrame，可有多个起报时间。`cap_power_on` 支持标量和
-非空序列（取首项）。标签字段可缺省或为 null。输出为 `timestamp_win`、`station`、
+输入支持含省级行和场站行的 DataFrame，或按列组织的 dict。dict 中 `station` 为
+`list[str]`，`timestamp_win` 为 datetime64 转换得到的 `int64 Tensor[B]`，默认单位由
+`data.tensor_timestamp_unit: ns` 指定；标量字段为 `Tensor[B]`，序列字段为
+`Tensor[B, L]`。同一起报时刻的省级行和用于加权的场站行必须位于同一个 batch。
+CUDA tensor 会先转到 CPU 完成 DataFrame 特征工程，TabM 仍在模型所在设备计算。
+`cap_power_on` 支持标量和非空序列（取首项）。标签字段可缺省或为 null。输出为
+`timestamp_win`、`station`、
 `observe_power_predict` 三列，最后一列每行是长度等于 horizon 数量的 `float32 ndarray`；
 返回结果不写本地文件。每次构造都需要先加载权重再推理，调用端负责 `.eval()`。
 
