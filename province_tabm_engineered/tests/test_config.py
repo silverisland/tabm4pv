@@ -27,8 +27,13 @@ def test_defaults_match_original_model_and_preprocessing():
         "metrics": ["rmse", "mae", "official_accuracy"],
         "capacity_floor_ratio": 0.2,
     }
-    assert config["features"]["history_weather_columns"] == ["GHI_SOLARGIS"]
-    assert config["features"]["weather_columns"] == [
+    assert config["features"]["history"]["observe_power"]["indices"] == {
+        "start": -96, "stop": -2,
+    }
+    assert config["features"]["history"]["GHI_SOLARGIS"]["index"] == {
+        "base": -96, "horizon_offset": True,
+    }
+    assert list(config["features"]["future"]) == [
         "GHI_SOLARGIS_predict",
         "TEMP_SOLARGIS_predict",
         "ssrd_pos_1_predict",

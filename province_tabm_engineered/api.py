@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +41,7 @@ def _print_config(task: str, source: ConfigInput, config: Config) -> None:
     print(
         f"{task}参数：device={config['model'].get('device', 'auto')}, "
         f"horizons={config['model'].get('horizons', 'all')}, "
-        f"history_length={config['features']['history_length']}, "
-        f"weather={config['features'].get('weather_columns', '<自动发现>')}"
+        f"features={config['features']}"
     )
     print(
         f"{task}参数：primary_metric={primary_metric(config)}, "
@@ -106,12 +106,17 @@ def _training_data(
 
 def _checkpoint(
     checkpoint: str | Path,
+    config: Config | None = None,
 ) -> tuple[Path, list[Path], dict[str, Any]]:
     path = Path(checkpoint).expanduser().resolve()
     checkpoint_dir = path.parent.parent if path.is_file() else path
     metadata = json.loads(
         (checkpoint_dir / "metadata.json").read_text(encoding="utf-8")
     )
+    if config is not None and "features" in metadata:
+        if config["features"] != metadata["features"]:
+            print("输入特征配置与训练时不同，使用 checkpoint 中保存的特征规则")
+        config["features"] = deepcopy(metadata["features"])
     model_paths = (
         [path]
         if path.is_file()
@@ -247,6 +252,7 @@ def train(config: ConfigInput, data: DataInput | None = None) -> dict[str, Any]:
         "horizons": horizons,
         "weather_columns": weather,
         "primary_metric": primary_metric(cfg),
+        "features": cfg["features"],
     }
     (output_dir / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -263,8 +269,8 @@ def predict(
     ckpt_path: str | Path, data: DataInput, config: ConfigInput
 ) -> pd.DataFrame:
     cfg = load_config(config)
+    checkpoint_dir, model_paths, _ = _checkpoint(ckpt_path, cfg)
     _print_config("推理", config, cfg)
-    checkpoint_dir, model_paths, _ = _checkpoint(ckpt_path)
     horizons = sorted(
         int(path.stem.removeprefix("model_h")) for path in model_paths
     )
@@ -286,8 +292,8 @@ def test(
     ckpt_path: str | Path, data: DataInput | None, config: ConfigInput
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     cfg = load_config(config)
+    checkpoint_dir, model_paths, _ = _checkpoint(ckpt_path, cfg)
     _print_config("测试", config, cfg)
-    checkpoint_dir, model_paths, _ = _checkpoint(ckpt_path)
     horizons = sorted(
         int(path.stem.removeprefix("model_h")) for path in model_paths
     )

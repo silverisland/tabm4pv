@@ -18,12 +18,7 @@ else:
     from province_tabm_engineered.api import _checkpoint, _print_config
     from province_tabm_engineered.config import ConfigInput, load_config
     from province_tabm_engineered.features import build_feature_data
-    from province_tabm_engineered.model import (
-        infer_array,
-        load_one,
-        resolve_device,
-        transform,
-    )
+    from province_tabm_engineered.model import infer_array, load_one, resolve_device, transform
 
 
 class Model:
@@ -31,8 +26,9 @@ class Model:
 
     def __init__(self, config: ConfigInput, ckpt_path: str | Path):
         self.config = load_config(config)
+        self.config["output"]["checkpoint_dir"] = str(ckpt_path)
+        self.checkpoint_dir, model_paths, _ = _checkpoint(ckpt_path, self.config)
         _print_config("推理模型初始化", config, self.config)
-        self.checkpoint_dir, model_paths, _ = _checkpoint(ckpt_path)
         self.device = resolve_device(self.config["model"].get("device", "auto"))
 
         model_paths = sorted(
@@ -60,7 +56,7 @@ class Model:
         )
 
     def inference(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Predict all origins and return one length-16 array per origin."""
+        """Predict all origins and return one array of configured horizons per origin."""
         capacity_col = self.config["data"]["columns"]["capacity"]
         if capacity_col not in df.columns:
             raise ValueError(f"输入 DataFrame 缺少容量列：{capacity_col}")

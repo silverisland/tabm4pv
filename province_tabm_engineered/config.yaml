@@ -25,18 +25,32 @@ data:
     power_future: observe_power_future
 
 features:
-  history_length: 96
   n_horizons: 16
   minutes_per_point: 15
-  # 每个 horizon 取昨日同一目标时刻，并按场站装机容量加权。
-  history_weather_columns:
-    - GHI_SOLARGIS
-  weather_suffix: _predict
-  weather_columns:
-    - GHI_SOLARGIS_predict
-    - TEMP_SOLARGIS_predict
-    - ssrd_pos_1_predict
-    - t2m_pos_1_predict
+  history:
+    observe_power:
+      # 取 [-96:-2] 共94点，排除最新两个可能被治理填补的点。
+      # stop: null 表示取到末尾；也支持 indices: [-96, -80, -4, -3]。
+      indices: {start: -96, stop: -2}
+      capacity_weighted: false
+    GHI_SOLARGIS:
+      # horizon 从1开始：H1取-95，H16取-80；时间含义取决于上游序列定义。
+      index: {base: -96, horizon_offset: true}
+      capacity_weighted: true
+  future:
+    GHI_SOLARGIS_predict:
+      index: {base: -1, horizon_offset: true}
+      capacity_weighted: true
+    TEMP_SOLARGIS_predict:
+      index: {base: -1, horizon_offset: true}
+      capacity_weighted: true
+    ssrd_pos_1_predict:
+      index: {base: -1, horizon_offset: true}
+      capacity_weighted: true
+    t2m_pos_1_predict:
+      index: {base: -1, horizon_offset: true}
+      capacity_weighted: true
+  time: [hour, hour_sin, hour_cos]
 model:
   # all 表示 1..n_horizons；也可以写成 [1, 4, 8, 16]。
   horizons: all

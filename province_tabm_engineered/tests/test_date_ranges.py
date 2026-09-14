@@ -101,10 +101,13 @@ def test_dataframe_is_selected_by_timestamp_date(tmp_path: Path):
 def _streaming_config(data_dir: Path) -> dict:
     config = _config(data_dir)
     config["features"] = {
-        "history_length": 4,
         "n_horizons": 2,
         "minutes_per_point": 15,
-        "weather_columns": ["ghi_predict"],
+        "history": {"observe_power": {"indices": {"start": -4, "stop": None}}},
+        "future": {"ghi_predict": {
+            "index": {"base": -1, "horizon_offset": True},
+            "capacity_weighted": True,
+        }},
     }
     return config
 

@@ -174,13 +174,3 @@ def array_at(value: object, index: int) -> float:
         if -len(values) <= index < len(values)
         else float("nan")
     )
-
-
-def history_values(value: object, length: int) -> np.ndarray:
-    try:
-        values = np.asarray(value, dtype=np.float32).reshape(-1)
-    except (TypeError, ValueError) as error:
-        raise ValueError("省级历史功率数组格式错误") from error
-    if len(values) < length:
-        raise ValueError(f"历史功率只有 {len(values)} 点，需要至少 {length} 点")
-    return values[-length:]

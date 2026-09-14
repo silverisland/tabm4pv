@@ -22,8 +22,12 @@ def test_build_inference_samples_without_future_target():
             },
         },
         "features": {
-            "history_length": 4,
             "minutes_per_point": 15,
+            "history": {"observe_power": {"indices": {"start": -4, "stop": None}}},
+            "future": {"ghi_predict": {
+                "index": {"base": -1, "horizon_offset": True},
+                "capacity_weighted": True,
+            }},
         },
     }
     timestamp = pd.Timestamp("2026-08-17 12:00:00")
@@ -42,12 +46,12 @@ def test_build_inference_samples_without_future_target():
     assert features.loc[0, "target_timestamp__h02"] == timestamp + pd.Timedelta(
         minutes=30
     )
-    assert features.loc[0, "weighted__ghi_predict__mean__h02"] == 20.0
+    assert features.loc[0, "future__weighted__ghi_predict__index_1__h02"] == 20.0
     assert columns[2][:4] == [
-        "power_lag_4",
-        "power_lag_3",
-        "power_lag_2",
-        "power_lag_1",
+        "history__observe_power__index_-4",
+        "history__observe_power__index_-3",
+        "history__observe_power__index_-2",
+        "history__observe_power__index_-1",
     ]
 
 
@@ -67,8 +71,13 @@ def test_feature_values_and_column_order():
             },
         },
         "features": {
-            "history_length": 4,
             "minutes_per_point": 15,
+            "history": {"observe_power": {"indices": {"start": -4, "stop": None}}},
+            "future": {"ghi_predict": {
+                "index": {"base": -1, "horizon_offset": True},
+                "capacity_weighted": True,
+            }},
+            "time": ["hour", "hour_sin", "hour_cos"],
         },
     }
     timestamp = pd.Timestamp("2026-08-17 06:00:00")
@@ -102,20 +111,20 @@ def test_feature_values_and_column_order():
     features, columns, _ = build_feature_data(data, config, [2])
     names = columns[2]
 
-    assert features.filter(like="power_lag_").columns.tolist() == names[:4]
+    assert features.filter(like="history__observe_power").columns.tolist() == names[:4]
 
     assert names == [
-        "power_lag_4",
-        "power_lag_3",
-        "power_lag_2",
-        "power_lag_1",
-        "weighted__ghi_predict__mean__h02",
+        "history__observe_power__index_-4",
+        "history__observe_power__index_-3",
+        "history__observe_power__index_-2",
+        "history__observe_power__index_-1",
+        "future__weighted__ghi_predict__index_1__h02",
         "time__hour__h02",
         "time__hour_sin__h02",
         "time__hour_cos__h02",
     ]
     np.testing.assert_allclose(features.loc[0, names[:4]], [1.0, 2.0, 3.0, 4.0])
-    assert features.loc[0, "weighted__ghi_predict__mean__h02"] == 20.0
+    assert features.loc[0, "future__weighted__ghi_predict__index_1__h02"] == 20.0
     assert features.loc[0, "target_power__h02"] == 60.0
     expected_hour = 6.5
     assert features.loc[0, "time__hour__h02"] == 6
@@ -142,10 +151,18 @@ def test_horizon_aligned_history_weather_is_capacity_weighted():
             },
         },
         "features": {
-            "history_length": 4,
             "minutes_per_point": 15,
-            "history_weather_columns": ["GHI_SOLARGIS"],
-            "weather_columns": ["ghi_predict"],
+            "history": {
+                "observe_power": {"indices": [-4, -3]},
+                "GHI_SOLARGIS": {
+                    "index": {"base": -96, "horizon_offset": True},
+                    "capacity_weighted": True,
+                },
+            },
+            "future": {"ghi_predict": {
+                "index": {"base": -1, "horizon_offset": True},
+                "capacity_weighted": True,
+            }},
         },
     }
     timestamp = pd.Timestamp("2026-08-17 06:00:00")
@@ -170,8 +187,8 @@ def test_horizon_aligned_history_weather_is_capacity_weighted():
 
     features, columns, _ = build_feature_data(data, config, [1, 16])
 
-    h01 = "weighted__GHI_SOLARGIS__lag95__h01"
-    h16 = "weighted__GHI_SOLARGIS__lag80__h16"
+    h01 = "history__weighted__GHI_SOLARGIS__index_-95__h01"
+    h16 = "history__weighted__GHI_SOLARGIS__index_-80__h16"
     assert h01 in columns[1]
     assert h16 in columns[16]
     assert features.loc[0, h01] == 76.0
