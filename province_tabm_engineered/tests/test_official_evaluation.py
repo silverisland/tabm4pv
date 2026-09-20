@@ -142,7 +142,9 @@ def test_evaluator_prefers_consolidated_predictions(tmp_path):
             "dtime": pd.date_range(
                 origin + pd.Timedelta(minutes=15), periods=16, freq="15min"
             ),
-            "horizon": np.arange(1, 17),
+            # Object/string input reproduces environments that otherwise expose
+            # horizon as a pandas nullable integer to NumPy validation.
+            "horizon": np.arange(1, 17).astype(str),
             "prediction_power": 100.0,
         }
     ).to_parquet(tmp_path / "evaluation_predictions.parquet", index=False)

@@ -63,10 +63,15 @@ def load_saved_predictions(path: str | Path, config: Config) -> pd.DataFrame:
 
         if "horizon" in source:
             raw_horizon = pd.to_numeric(source["horizon"], errors="coerce")
-            horizon = raw_horizon.round().astype("Int64")
-            if raw_horizon.isna().any() or not np.allclose(raw_horizon, horizon):
+            horizon_values = raw_horizon.to_numpy(
+                dtype=np.float64, na_value=np.nan
+            )
+            rounded_horizon = np.rint(horizon_values)
+            if not np.isfinite(horizon_values).all() or not np.allclose(
+                horizon_values, rounded_horizon
+            ):
                 raise ValueError(f"指标汇总文件 {file} 存在无效 horizon")
-            current["horizon"] = horizon.astype(int)
+            current["horizon"] = rounded_horizon.astype(np.int64)
             if "forecast_origin" in source:
                 origin = pd.to_datetime(source["forecast_origin"], errors="coerce")
                 offset = (
@@ -74,7 +79,7 @@ def load_saved_predictions(path: str | Path, config: Config) -> pd.DataFrame:
                     / pd.Timedelta(minutes=minutes)
                 ).to_numpy(dtype=float)
                 if origin.isna().any() or not np.allclose(
-                    offset, current["horizon"]
+                    offset, current["horizon"].to_numpy(dtype=np.float64)
                 ):
                     raise ValueError(f"指标汇总文件 {file} 的时间与 horizon 不对齐")
             current = current.sort_values(
