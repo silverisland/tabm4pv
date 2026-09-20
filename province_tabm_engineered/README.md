@@ -1,18 +1,53 @@
 # 省级超短期 TabM 工程版
 
-本目录由原始 `train_general.py` 拆分而来，提供训练、测试和推理三个稳定接口。原始版本的 v2 特征保持不变：省级最近 96 点功率、各场站按有效装机容量加权的逐时效气象、容量覆盖率和目标时刻周期特征。
+本目录由原始 `train_general.py` 拆分而来，提供训练、测试和推理接口。序列特征由原始字段、索引和容量加权规则配置，一份 config 生成所有 horizon 的输入列。
 
 ## 与原版的一致性
 
-默认配置保持原脚本的有效建模逻辑：
+模型结构与预处理沿用原版，特征和训练指标由配置决定：
 
 - TabM 使用 `LinearReLUEmbeddings`，默认结构为 2 个 block、`d_block=512`、`dropout=0.1`、`k=32` 和 `arch_type=tabm`。
 - 每个 horizon 独立训练一个模型，目标按 15000 缩放，预测裁剪到 `[0, 15750]`。
-- 特征顺序保持为 96 点历史功率、装机容量加权气象、气象容量覆盖率、目标时刻 hour sin/cos。
-- 缺失值中位数填充与 `QuantileTransformer` 只在训练集上拟合；默认 quantile 数量、微小噪声和 `subsample=10**9` 与原脚本一致。
+- 默认功率取 `observe_power[-96:-2]`（94点），排除最新两个可能被治理填补的点；另加入逐 horizon 的历史、未来加权气象和时间特征。
+- 缺失值中位数填充与 `QuantileTransformer` 只在训练集上拟合；`training.preprocessing.use_imputer: false` 可在上游已处理缺失值时跳过 `SimpleImputer`，默认仍启用以保持原版行为。
 - 默认仍从 `/jtdata/products/data/info.csv` 覆盖场站容量；如果传入数据的 `cap_power_on` 已经可信，可将 `data.capacity_csv` 设置为 `null`。
 
-唯一有意调整的是数据切分：原脚本中真正执行的硬编码条件会让验证集包含测试集，并且忽略已经计算好的日期边界。工程版改为 `training.split` 配置，保证训练、验证、测试互斥；这不改变模型结构和特征工程。
+训练、验证和测试通过 `data.date_ranges` 或 `training.split` 划分。
+
+## 配置序列特征
+
+```yaml
+features:
+  n_horizons: 16
+  minutes_per_point: 15
+  history:
+    observe_power:
+      indices: {start: -96, stop: -2}
+      capacity_weighted: false
+    GHI_SOLARGIS:
+      index: {base: -96, horizon_offset: true}
+      capacity_weighted: true
+  future:
+    GHI_SOLARGIS_predict:
+      index: {base: -1, horizon_offset: true}
+      capacity_weighted: true
+  time: [hour, hour_sin, hour_cos]
+```
+
+- `index: -3`：固定取倒数第3点；也支持 `index: {base: -3, horizon_offset: false}`。
+- `indices: [-96, -80, -4, -3]`：按列表顺序取点。
+- `indices: {start: -96, stop: -2, step: 1}`：依次取-96到-3，stop不包含在内；`stop: null` 表示负索引取到-1。start/stop应同为负数或同为非负数；跨边界使用显式列表。
+- `index: {base: -96, horizon_offset: true}`：实际索引为 `base + horizon`。horizon从1开始，H1取-95、H16取-80、H20取-76。
+- `capacity_weighted: true`：每个站先取指定点，再按该点有效容量加权；false或省略时取省级行。缺失值不参与站级加权；所有站该点缺失时结果为NaN。
+- `time` 可以选择 hour/hour_sin/hour_cos，省略或设为 `[]` 时不增加时间特征。hour为整数小时，sin/cos包含分钟。
+
+`history` 和 `future` 都是显式字段配置，不再按字段后缀自动发现。删除 `history.GHI_SOLARGIS` 即可停用历史气象；恢复最新两点可将功率的stop改为null。
+
+固定索引只构造一次；只有开启horizon_offset的字段和时间特征按horizon生成。返回值仍为 `df, columns_by_horizon, weighted_fields`。例如共享列 `history__observe_power__index_-96`，H1列 `future__weighted__GHI_SOLARGIS_predict__index_0__h01`。原始字段名、加权方式和实际索引包含在列名中。
+
+索引按原始数组从旧到新解释，索引的实际时刻需与上游核对；越界点记为NaN，不能凭配置创造缺失观测。训练标签仍取 `data.columns.power_future` 的 `horizon-1` 点，目标时刻仍为起报时刻加 `horizon * minutes_per_point`；history/future配置只控制模型输入。
+
+这一版使用新的特征列名，需要重新训练；旧的history_length/weather_columns/history_weather_columns配置应迁移到上述格式。旧checkpoint请使用与其训练匹配的旧代码和配置，不能直接搭配这份新配置。
 
 ## 安装
 
@@ -57,7 +92,7 @@ prediction_df = predict(
 | `dtime` | 目标时刻 |
 | `predict_power_province_guangxi_solar` | 省级功率预测值 |
 
-`predict()` 必须加载完整的 1–16 horizon checkpoint；传单模型文件或输入多个起报时刻会报错。`ckpt_path` 一般传完整 checkpoint 目录。
+`predict()` 一般传完整 checkpoint 目录，并且输入数据只允许一个起报时刻。
 
 推理数据不要求 `observe_power_future`，但必须只包含一个省级起报时刻，并包含该时刻的省级行（提供历史功率数组）和对应场站行（提供气象数组及容量）。数组至少要覆盖配置中的 16 个时效。
 
@@ -78,7 +113,6 @@ data:
   path: /path/to/all_parquets
   file_glob: "plantid=*.parquet"
   file_date_regex: "plantid=(\\d{4}-\\d{2}-\\d{2})\\.parquet$"
-  strict_file_dates: true
   date_ranges:
     train:
       start: 2026-06-01
@@ -91,16 +125,54 @@ data:
       end: 2026-08-15
 ```
 
-日期范围必须按照 train、validation、test 的顺序且不能重叠。启用后：
+启用后：
 
 - `train(config)` 分别读取三个范围并进行训练、早停验证和最终测试；
 - `test(ckpt, None, config)` 只读取 `test` 范围；
 - 直接传入 DataFrame 时，使用配置的 timestamp 列按日期执行相同过滤；
 - `date_ranges: null` 时继续使用旧的 `training.split` 自动切分。
 
-目录输入会逐文件完成容量覆盖、数据校验和全部时效的加权气象特征，只拼接体积较小的省级样本，文件处理完后即释放场站级原始数据。为保证结果与全量计算一致，同一起报时刻不能跨文件出现，程序也会自动校验文件名日期与文件内起报日期一致。
+目录输入会逐文件计算全部时效的加权气象特征，文件处理完后即释放场站级原始数据。
 
 训练和推理可以使用不同设备；只需分别在配置中设置 `model.device` 为 `cpu`、`cuda:0` 或 `auto`。模型结构与特征配置应保持一致。
+
+## 评价指标
+
+评价指标由 config 控制：
+
+```yaml
+evaluation:
+  primary_metric: official_accuracy
+  metrics: [rmse, mae, official_accuracy]
+  capacity_floor_ratio: 0.2
+```
+
+`official_accuracy` 在每个 horizon 模型内部独立计算：`1 - mean(abs(预测功率 - 可用功率) / max(可用功率, 0.2 * 装机容量))`。不同 horizon 的指标不会再次合并。
+
+训练 loss 默认与该分母对齐：
+
+```yaml
+training:
+  loss: weighted_mae
+```
+
+`weighted_mae` 在物理功率尺度上计算每个 TabM 成员的 `abs(预测功率 - 可用功率) / max(可用功率, 0.2 * 装机容量)` 并求平均。它不先平均 TabM 成员，也不先平均 horizon。需要恢复原训练损失时，将 `loss` 改为 `mse`。
+
+训练时，每个 horizon 使用它自己的归一化准确率选择最佳 epoch；测试时也只输出各 horizon 自己的 RMSE、MAE 和 `official_accuracy`。如需保持原来的早停逻辑，只需将 `primary_metric` 改为 `rmse`。
+
+### 独立计算官方日/月指标
+
+`evaluate` 不加载模型。预测路径读取 `predict()`/`test()` 保存的一起报时刻一文件结果；可用功率路径读取与训练数据相同格式的 parquet 文件或目录，并从省级行的 `observe_power_future` 提取真值：
+
+```bash
+python province_tabm_engineered/cli.py evaluate \
+  --config province_tabm_engineered/config.yaml \
+  --predictions /path/to/forecasts \
+  --available-power /path/to/available_power_data \
+  --output /path/to/forecast_metrics.xlsx
+```
+
+Excel 包含“日指标”“月平均”“计算说明”三个工作表。日指标按目标时刻所在自然日计算，每日应有 `96 * 16` 个预测；缺失预测默认将归一化误差记为 1。月指标是可用功率完整日的日指标算术平均。若模型预测20个点，只有前16个进入官方指标。
 
 ## Checkpoint 结构
 
@@ -109,12 +181,84 @@ artifacts/tabm_v2/
 ├── config_resolved.yaml
 ├── metadata.json
 ├── metrics_by_horizon.csv
-├── test_predictions.parquet
 ├── models/model_h01.pt ... model_h16.pt
-└── preprocessors/preprocessor_h01.joblib ... preprocessor_h16.joblib
+├── preprocessors/preprocessor_h01.joblib ... preprocessor_h16.joblib
+└── deployment/
+    ├── model.safetensors
+    └── model_config.yaml
 ```
 
-推理时模型特征名、目标缩放和 horizon 从 checkpoint 读取，配置用于定义输入列、特征构造、设备与输出字段。气象列与训练元数据不一致时会直接报错，避免静默产生错误预测。
+新checkpoint的metadata.json保存完整features配置，config_resolved.yaml保存完整训练配置。test()/predict()/Model.inference()自动沿用checkpoint中的features；输入配置不同时会print提示。每个子模型仍按其保存的有序feature_names选列。设备、数据路径、容量表及输出配置仍来自调用方；原始字段映射应与训练一致。
+
+## 接入推理 backbone
+
+`backbone.py` 提供 `ProvinceTabMBackbone(nn.Module)` 与 `build_model()` 注册示例。
+它通过 `ModuleDict` 注册所有 horizon 的 TabM，通过 buffer 保存中位数和分位点；
+`load_state_dict(strict=True)` 一次加载模型权重与预处理参数。
+完整训练结束时会自动导出到 `checkpoint_dir/deployment/`，无需再手动执行导出：
+
+```python
+result = train(config, data)
+deployment_dir = result["deployment_dir"]
+```
+
+重复训练会更新该目录的两个部署文件；原 `.pt` 和 `.joblib` 仍正常保存。
+如果 `model.horizons` 仅选择部分 horizon，则跳过导出，`deployment_dir` 返回 `None`。
+导出失败会直接报错，不会打印训练全部完成，已经保存的训练 checkpoint 可用于重试导出。
+
+对于之前训练好的 checkpoint，仍可单独运行：
+
+```bash
+python -m province_tabm_engineered.export_checkpoint \
+  --checkpoint artifacts/tabm_v2 \
+  --output artifacts/tabm_deployment
+```
+
+导出目录须为空。默认读取训练目录中的 `config_resolved.yaml`，也可通过 `--config`
+指定配置；特征规则优先取 `metadata.json`。适用于当前 `history/future` 特征配置的
+完整 checkpoint，支持 16/20 个或其他配置数量的连续 horizon。
+
+部署目录仅包含 `model.safetensors` 和 `model_config.yaml`，不需要 joblib 文件。
+训练时启用了 Imputer 就导出中位数，关闭时保持不填充；QuantileTransformer 的
+重复分位点双向插值、正态映射及边界截断由 PyTorch 完成。
+若使用容量 CSV，导出时将其快照写入配置的 `data.capacity_mapping`，部署无需原 CSV。
+
+在你们框架的 `build_model()` 中为 `province_tabm` 注册 `ProvinceTabMBackbone`，
+加载与调用方式如下（配置必须使用导出版本）：
+
+```python
+from pathlib import Path
+from safetensors.torch import load_file
+from province_tabm_engineered.backbone import build_model
+from province_tabm_engineered.config import load_config
+
+directory = Path("artifacts/tabm_v2/deployment")
+model_config = load_config(directory / "model_config.yaml")
+model = build_model("province_tabm", model_config)
+state_dict = load_file(str(directory / "model.safetensors"))
+model.load_state_dict(state_dict, strict=True)
+model.to("cpu").eval()  # GPU 部署时改为 "cuda:0"
+
+result = model.inference(df)  # 等价于 model(df)
+```
+
+输入支持含省级行和场站行的 DataFrame，或按列组织的 dict。dict 中 `station` 为
+`list[str]`，`timestamp_win` 为 datetime64 转换得到的 `int64 Tensor[B]`，默认单位由
+`data.tensor_timestamp_unit: ns` 指定；标量字段为 `Tensor[B]`，序列字段为
+`Tensor[B, L]`。同一起报时刻的省级行和用于加权的场站行必须位于同一个 batch。
+CUDA tensor 会先转到 CPU 完成 DataFrame 特征工程，TabM 仍在模型所在设备计算。
+`cap_power_on` 支持标量和非空序列（取首项）。标签字段可缺省或为 null。输出为
+`timestamp_win`、`station`、
+`observe_power_predict` 三列，最后一列每行是长度等于 horizon 数量的 `float32 ndarray`；
+返回结果不写本地文件。每次构造都需要先加载权重再推理，调用端负责 `.eval()`。
+
+部署依赖见 `requirements-inference.txt`，不要求安装 sklearn/joblib。导出需在能正常
+读取原 joblib 的训练环境执行。代码仍需随服务部署，并非只复制两个参数文件即可运行。
+DataFrame 特征工程运行在 CPU，张量预处理和 TabM 支持 CPU/CUDA；当前实现使用 float64
+分位点进行插值，使用 `.to(device)` 切换设备，不要对整个包装模型调用 `.half()`。
+
+回归测试覆盖分位数边界和重复值、启用/关闭填充、16/20 个模型导出后的预测对齐，以及
+禁止导入 sklearn/joblib 的独立进程推理。不同设备可能存在浮点误差，不承诺逐位相同。
 
 ## print 运行信息
 
@@ -127,17 +271,7 @@ training:
 
 首个 epoch 始终打印；之后每隔指定 epoch 打印一次。模型与预处理器每次保存、加载时都会直接 `print` 完整路径，方便定位产物。
 
-任务启动时还会通过 `print` 输出参数审计信息，包括：
-
-- config 输入来源和解析后的绝对路径；
-- checkpoint 原始输入、解析后的目录及实际加载的模型文件列表；
-- checkpoint 内的 horizon、特征数、target scale、best epoch 和模型结构；
-- DataFrame 列映射、容量来源、省级容量及气象列；
-- history length、horizon 数量、时间间隔、设备和预测裁剪范围；
-- batch size、学习率、权重衰减、early stopping 和数据切分参数；
-- Imputer 输入特征数及 QuantileTransformer 的 quantile 数量和输出分布。
-
-这些日志同时展示“调用时传入的参数”和“checkpoint 中实际保存的参数”，可以用于排查传错 config、ckpt、设备或特征配置的问题。
+任务启动时会打印 config、数据路径、日期范围、checkpoint、设备、horizon 和主要特征参数；模型保存和加载时打印完整文件路径。
 
 ## 测试
 

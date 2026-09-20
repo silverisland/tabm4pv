@@ -6,9 +6,11 @@ from pathlib import Path
 
 if __package__:
     from .api import predict, test, train
+    from .evaluation import evaluate_saved_predictions
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from province_tabm_engineered.api import predict, test, train
+    from province_tabm_engineered.evaluation import evaluate_saved_predictions
 
 
 def parser() -> argparse.ArgumentParser:
@@ -29,6 +31,12 @@ def parser() -> argparse.ArgumentParser:
     predict_parser.add_argument("--checkpoint", required=True)
     predict_parser.add_argument("--data", required=True)
     predict_parser.add_argument("--output", required=True)
+
+    evaluate_parser = commands.add_parser("evaluate", help="计算官方日/月指标")
+    evaluate_parser.add_argument("--config", required=True)
+    evaluate_parser.add_argument("--predictions", required=True)
+    evaluate_parser.add_argument("--available-power", required=True)
+    evaluate_parser.add_argument("--output", required=True)
     return result
 
 
@@ -42,11 +50,19 @@ def main() -> None:
         metrics, predictions = test(args.checkpoint, args.data, args.config)
         print(metrics.to_string(index=False))
         print(f"delivery rows returned: {len(predictions):,}")
-    else:
+    elif args.command == "predict":
         predictions = predict(args.checkpoint, args.data, args.config)
         output = Path(args.output).expanduser().resolve()
         predictions.to_parquet(output, index=False)
         print(f"saved {len(predictions):,} predictions to {output}")
+    else:
+        output = evaluate_saved_predictions(
+            args.predictions,
+            args.available_power,
+            args.config,
+            args.output,
+        )
+        print(f"metric report: {output}")
 
 
 if __name__ == "__main__":
