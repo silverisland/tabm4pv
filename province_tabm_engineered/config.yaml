@@ -115,6 +115,8 @@ output:
   prediction_column: predict_power_province_guangxi_solar
   # null 时保存到 checkpoint_dir/forecasts，与原脚本目录结构一致。
   forecast_dir: null
+  # test() 额外保存的指标长表；evaluate 会优先读取，避免逐个扫描交付小文件。
+  evaluation_filename: evaluation_predictions.parquet
   # auto 表示运行当天 YYYYMMDD，也可固定为具体日期字符串。
   date_tag: auto
   method_version: tabm_v2

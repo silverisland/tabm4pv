@@ -27,6 +27,9 @@ def test_defaults_match_original_model_and_preprocessing():
         "primary_metric": "official_accuracy",
         "metrics": ["rmse", "mae", "official_accuracy"],
         "capacity_floor_ratio": 0.2,
+        "official_horizons": 16,
+        "missing_normalized_error": 1.0,
+        "groundtruth_tolerance": 0.000001,
     }
     assert config["features"]["history"]["observe_power"]["indices"] == {
         "start": -96, "stop": -2,

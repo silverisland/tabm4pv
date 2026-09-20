@@ -10,6 +10,7 @@ from province_tabm_engineered.delivery import (
     delivery_filename,
     delivery_frames,
     save_delivery_frames,
+    save_evaluation_predictions,
 )
 
 
@@ -58,3 +59,13 @@ def test_delivery_format_and_filename_match_original(tmp_path: Path):
     saved = pd.read_parquet(paths[0])
     pd.testing.assert_frame_equal(saved, frame)
     pd.testing.assert_frame_equal(combine_delivery_frames(frames), frame)
+
+    evaluation_path = save_evaluation_predictions(predictions, tmp_path, config)
+    evaluation = pd.read_parquet(evaluation_path)
+    assert evaluation.columns.tolist() == [
+        "forecast_origin",
+        "dtime",
+        "horizon",
+        "predict_power_province_guangxi_solar",
+    ]
+    assert len(evaluation) == 2

@@ -104,6 +104,8 @@ hw_nuoya_{YYYYMMDDHHMM}_ultra_short_province_guangxi_solar_{date_tag}_tabm_v2.pa
 
 每个文件严格只有 `dtime` 和预测值两列。`test()` 返回的第二个 DataFrame 也只有这两列；多个起报时刻时使用 `forecast_origin` 多级索引区分，不会把该索引写入交付文件。
 
+`test()` 还会在同一目录额外保存 `evaluation_predictions.parquet`。该文件把全部起报时刻合并为 `forecast_origin、dtime、horizon、预测值` 长表，仅供批量指标计算，不改变正式交付格式。`evaluate` 检测到该文件后会优先读取；没有该文件时仍兼容逐个读取原交付文件。
+
 ## 按文件名日期划分数据
 
 训练、验证和测试共用一个 `data.path`。配置 `date_ranges` 后，程序会先解析 `plantid=YYYY-MM-DD.parquet` 中的日期，再选择文件读取；三个范围的 `start/end` 都是闭区间：

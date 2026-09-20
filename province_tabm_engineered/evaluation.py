@@ -9,6 +9,7 @@ import pandas as pd
 
 from .config import Config, ConfigInput, load_config
 from .data import DataInput, array_at, iter_data_frames
+from .delivery import DEFAULT_EVALUATION_FILENAME
 
 
 _ORIGIN_PATTERN = re.compile(r"hw_nuoya_(\d{12})_ultra_short_")
@@ -25,8 +26,19 @@ def _parquet_files(path: str | Path, file_glob: str = "*.parquet") -> list[Path]
 
 
 def load_saved_predictions(path: str | Path, config: Config) -> pd.DataFrame:
-    """Read one-file-per-origin delivery results and recover their horizons."""
-    files = _parquet_files(path)
+    """Read the evaluation table, falling back to one-file-per-origin results."""
+    input_path = Path(path).expanduser().resolve()
+    aggregate_name = config["output"].get(
+        "evaluation_filename", DEFAULT_EVALUATION_FILENAME
+    )
+    aggregate = input_path / aggregate_name
+    files = (
+        [aggregate]
+        if input_path.is_dir() and aggregate.is_file()
+        else _parquet_files(path)
+    )
+    if files == [aggregate]:
+        print(f"检测到指标汇总文件，优先读取：{aggregate}")
     time_column = "dtime"
     value_column = config["output"]["prediction_column"]
     horizon_count = int(config.get("evaluation", {}).get("official_horizons", 16))
@@ -40,12 +52,38 @@ def load_saved_predictions(path: str | Path, config: Config) -> pd.DataFrame:
             raise KeyError(f"预测文件 {file} 缺少列：{sorted(missing)}")
         current = pd.DataFrame(
             {
-                "target_timestamp": pd.to_datetime(source[time_column], errors="coerce"),
+                "target_timestamp": pd.to_datetime(
+                    source[time_column], errors="coerce"
+                ),
                 "prediction": pd.to_numeric(source[value_column], errors="coerce"),
             }
-        ).sort_values("target_timestamp", ignore_index=True)
+        )
         if current["target_timestamp"].isna().any():
             raise ValueError(f"预测文件 {file} 存在无效 dtime")
+
+        if "horizon" in source:
+            raw_horizon = pd.to_numeric(source["horizon"], errors="coerce")
+            horizon = raw_horizon.round().astype("Int64")
+            if raw_horizon.isna().any() or not np.allclose(raw_horizon, horizon):
+                raise ValueError(f"指标汇总文件 {file} 存在无效 horizon")
+            current["horizon"] = horizon.astype(int)
+            if "forecast_origin" in source:
+                origin = pd.to_datetime(source["forecast_origin"], errors="coerce")
+                offset = (
+                    (current["target_timestamp"] - origin)
+                    / pd.Timedelta(minutes=minutes)
+                ).to_numpy(dtype=float)
+                if origin.isna().any() or not np.allclose(
+                    offset, current["horizon"]
+                ):
+                    raise ValueError(f"指标汇总文件 {file} 的时间与 horizon 不对齐")
+            current = current.sort_values(
+                ["target_timestamp", "horizon"], ignore_index=True
+            )
+            parts.append(current[current["horizon"].between(1, horizon_count)])
+            continue
+
+        current = current.sort_values("target_timestamp", ignore_index=True)
         if current["target_timestamp"].duplicated().any():
             raise ValueError(f"预测文件 {file} 存在重复 dtime")
 
@@ -84,7 +122,7 @@ def load_saved_predictions(path: str | Path, config: Config) -> pd.DataFrame:
             f"dtime={row['target_timestamp']}, horizon={int(row['horizon'])}"
         )
     print(
-        f"预测结果读取完成：path={Path(path).expanduser().resolve()}, "
+        f"预测结果读取完成：path={input_path}, "
         f"files={len(files)}, rows={len(result):,}"
     )
     return result

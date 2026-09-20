@@ -9,6 +9,7 @@ from .config import Config
 
 
 INTERNAL_PREDICTION_COLUMN = "prediction_power"
+DEFAULT_EVALUATION_FILENAME = "evaluation_predictions.parquet"
 
 
 def expected_horizons(config: Config) -> set[int]:
@@ -90,6 +91,36 @@ def save_delivery_frames(
         print(f"交付预测已保存：{path.resolve()}")
     print(f"交付文件生成完成：count={len(paths)}, directory={output_dir.resolve()}")
     return paths
+
+
+def save_evaluation_predictions(
+    predictions: pd.DataFrame,
+    checkpoint_dir: Path,
+    config: Config,
+) -> Path:
+    """Save all forecast origins in one long table for efficient evaluation."""
+    output_dir = forecast_directory(checkpoint_dir, config)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filename = config["output"].get(
+        "evaluation_filename", DEFAULT_EVALUATION_FILENAME
+    )
+    path = output_dir / filename
+    result = predictions[
+        ["timestamp", "target_timestamp", "horizon", INTERNAL_PREDICTION_COLUMN]
+    ].rename(
+        columns={
+            "timestamp": "forecast_origin",
+            "target_timestamp": "dtime",
+            INTERNAL_PREDICTION_COLUMN: config["output"]["prediction_column"],
+        }
+    )
+    result["horizon"] = result["horizon"].astype(np.int16)
+    result[config["output"]["prediction_column"]] = result[
+        config["output"]["prediction_column"]
+    ].astype(np.float32)
+    result.sort_values(["forecast_origin", "horizon"]).to_parquet(path, index=False)
+    print(f"指标汇总预测已保存：rows={len(result):,}, path={path.resolve()}")
+    return path
 
 
 def combine_delivery_frames(

@@ -16,6 +16,7 @@ from .delivery import (
     combine_delivery_frames,
     delivery_frames,
     save_delivery_frames,
+    save_evaluation_predictions,
 )
 from .features import build_feature_data
 from .metrics import (
@@ -324,6 +325,7 @@ def test(
         values = ", ".join(f"{name}={value:.6f}" for name, value in score.items())
         print(f"horizon={int(horizon):02d}：{values}")
     metrics_df = pd.DataFrame(metrics)
+    save_evaluation_predictions(predictions, checkpoint_dir, cfg)
     frames = delivery_frames(predictions, cfg, skip_incomplete=True)
     save_delivery_frames(frames, checkpoint_dir, cfg)
     return metrics_df, combine_delivery_frames(frames)

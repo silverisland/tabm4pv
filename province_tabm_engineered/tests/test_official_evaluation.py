@@ -6,6 +6,7 @@ import pandas as pd
 from province_tabm_engineered.evaluation import (
     calculate_official_metrics,
     evaluate_saved_predictions,
+    load_saved_predictions,
 )
 
 
@@ -130,3 +131,26 @@ def test_independent_interface_writes_excel(tmp_path):
     assert pd.ExcelFile(output).sheet_names == ["日指标", "月平均", "计算说明"]
     daily = pd.read_excel(output, sheet_name="日指标")
     np.testing.assert_allclose(daily.loc[0, "超短期预测准确率"], 1.0)
+
+
+def test_evaluator_prefers_consolidated_predictions(tmp_path):
+    pd.DataFrame({"unexpected": [1]}).to_parquet(tmp_path / "delivery.parquet")
+    origin = pd.Timestamp("2026-08-01 00:00")
+    pd.DataFrame(
+        {
+            "forecast_origin": [origin] * 16,
+            "dtime": pd.date_range(
+                origin + pd.Timedelta(minutes=15), periods=16, freq="15min"
+            ),
+            "horizon": np.arange(1, 17),
+            "prediction_power": 100.0,
+        }
+    ).to_parquet(tmp_path / "evaluation_predictions.parquet", index=False)
+    config = {
+        "features": {"minutes_per_point": 15},
+        "evaluation": {"official_horizons": 16},
+        "output": {"prediction_column": "prediction_power"},
+    }
+    result = load_saved_predictions(tmp_path, config)
+    assert len(result) == 16
+    assert result["horizon"].tolist() == list(range(1, 17))
